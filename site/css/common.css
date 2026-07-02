@@ -1,0 +1,55 @@
+:root {
+  --font: "Inter", sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", monospace;
+  --bg: #fafafa;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.02);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  background: var(--bg);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.app {
+  min-height: 100vh;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--xl);
+}
+
+.block {
+  background: var(--surface);
+  border-radius: var(--m);
+  box-shadow: var(--shadow-card);
+  padding: var(--m) var(--l);
+}
+
+.description-paragraph {
+  margin: 0 0 var(--m);
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-main);
+}
+
+.description-inline-code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  background-color: var(--surface-2);
+}
