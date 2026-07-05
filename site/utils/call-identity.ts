@@ -2,6 +2,8 @@ import type { SecretAuthState } from "cruzo-web3";
 
 type WalletPubKey = NonNullable<SecretAuthState["pubKey"]>;
 
+const apiBase = (import.meta.env.VITE_API_BASE ?? "/api").replace(/\/$/, "");
+
 function canonicalPubKey(pubKey: WalletPubKey) {
   return `${pubKey.type}|${pubKey.encoding}|${pubKey.value.toLowerCase()}`;
 }
@@ -13,7 +15,7 @@ export async function pubKeyToCallIdentity(
   const canonicalString = canonicalPubKey(pubKey);
 
   // Отправляю строку на бэкенд
-  const response = await fetch(`/api/generate-id?pubkey=${encodeURIComponent(canonicalString)}`);
+  const response = await fetch(`${apiBase}/generate-id?pubkey=${encodeURIComponent(canonicalString)}`);
 
   if (!response.ok) {
     throw new Error("Failed to generate Call ID from server");

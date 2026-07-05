@@ -33,8 +33,8 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          VITE_BASE_PATH: /${{ github.event.repository.name }}/
-          VITE_API_BASE: ${{ vars.VITE_API_BASE }}
+          VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '/' }}
+          VITE_API_BASE: ${{ vars.VITE_API_BASE || 'https://server-01.decall.app' }}
           VITE_WALLETCONNECT_PROJECT_ID: ${{ vars.VITE_WALLETCONNECT_PROJECT_ID }}
 
       - name: Upload artifact
