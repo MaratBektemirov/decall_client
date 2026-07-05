@@ -18,6 +18,12 @@ export class SecretAuthPageComponent extends AbstractComponent {
   callIdentity$ = this.newRx("");
   hasCallIdentity$ = this.newRx(false);
   copyLabel$ = this.newRx("Copy ID");
+  private localStream: MediaStream | null = null;
+  isAudioEnabled$ = this.newRx(false);
+  isVideoEnabled$ = this.newRx(false);
+  // states for the remote user
+  isRemoteAudioEnabled$ = this.newRx(true);
+  isRemoteVideoEnabled$ = this.newRx(true);
   challengeLoading$ = this.newRx(false);
   challengeError$ = this.newRx("");
 
@@ -114,15 +120,65 @@ export class SecretAuthPageComponent extends AbstractComponent {
               class="${k}_button ${k}_button-s ${k}_button-primary"
               onclick="{{ root.joinChatRoom() }}">Join</button>
           </div>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 0 15px;">
+            
+            <div style="position: relative; width: 50%; aspect-ratio: 4/3;">
+              <video id="localVideo" autoplay playsinline muted 
+                     style="width: 100%; height: 100%; background: #000; border-radius: 8px; object-fit: cover;">
+              </video>
+              
+              <div style="position: absolute; bottom: 8px; right: 8px; display: flex; gap: 6px;">
+                <div attached="{{ !root.isAudioEnabled$::rx }}" 
+                     style="background: rgba(0,0,0,0.7); padding: 4px 6px; border-radius: 6px; font-size: 14px;">
+                  🔇
+                </div>
+                <div attached="{{ !root.isVideoEnabled$::rx }}" 
+                     style="background: rgba(0,0,0,0.7); padding: 4px 6px; border-radius: 6px; font-size: 14px;">
+                  🚫
+                </div>
+              </div>
+            </div>
+            
+            <div style="position: relative; width: 50%; aspect-ratio: 4/3;">
+              <video id="remoteVideo" autoplay playsinline 
+                     style="width: 100%; height: 100%; background: #000; border-radius: 8px; object-fit: cover;">
+              </video>
+              
+              <div style="position: absolute; bottom: 8px; right: 8px; display: flex; gap: 6px;">
+                <div attached="{{ !root.isRemoteAudioEnabled$::rx }}" 
+                     style="background: rgba(0,0,0,0.7); padding: 4px 6px; border-radius: 6px; font-size: 14px;">
+                  🔇
+                </div>
+                <div attached="{{ !root.isRemoteVideoEnabled$::rx }}" 
+                     style="background: rgba(0,0,0,0.7); padding: 4px 6px; border-radius: 6px; font-size: 14px;">
+                  🚫
+                </div>
+              </div>
+            </div>
+          </div>
 
+          <div style="display: flex; justify-content: center; gap: 12px; margin-bottom: 15px;">
+            <button type="button"
+              class="${k}_button ${k}_button-s ${k}_button-secondary"
+              onclick="{{ root.toggleVideo() }}">
+              {{ root.isVideoEnabled$::rx ? 'Camera Off' : 'Camera On' }}
+            </button>
+            <button type="button"
+              class="${k}_button ${k}_button-s ${k}_button-secondary"
+              onclick="{{ root.toggleAudio() }}">
+              {{ root.isAudioEnabled$::rx ? 'Audio Off' : 'Audio On' }}
+            </button>
+          </div>
+            
           <div class="${styles.messages}">
             <div repeat="{{ root.chatMessages }}" class="${styles.messageRow}">
               <div class="${styles.message} ${styles.messageMe}" attached="{{ this::rx.from === 'me' }}">{{ this::rx.text }}</div>
               <div class="${styles.message} ${styles.messagePeer}" attached="{{ this::rx.from === 'peer' }}">{{ this::rx.text }}</div>
               <div class="${styles.message} ${styles.messageSystem}" attached="{{ this::rx.from === 'system' }}">{{ this::rx.text }}</div>
             </div>
-          </div>
-
+          </div>  
+            
           <div class="${styles.composeRow}">
             <textarea
               class="${k}_textarea ${styles.chatInput}"
@@ -182,6 +238,12 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.chatSession?.close();
     this.chatSession = null;
     this.chatStatus$.update("idle");
+
+    // turn off camera and audio
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream = null;
+    }
   }
 
   copyCallID() {
@@ -201,18 +263,114 @@ export class SecretAuthPageComponent extends AbstractComponent {
         });
   }
 
-  private startChat(roomId: string, role: "host" | "guest") {
+  private async startCamera() {
+    try {
+      // trying to request access to the camera and audio
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
+      });
+    } catch (err) {
+      console.warn("Camera not found or denied, falling back to audio only...", err);
+
+      try {
+        // if video unavailable, trying to request audio
+        this.localStream = await navigator.mediaDevices.getUserMedia({
+          video: false,
+          audio: true
+        });
+      } catch (audioErr) {
+        // if audio unavailable (or user denied the request)
+        console.error("Failed to access microphone:", audioErr);
+        this.chatStatus$.update("media error");
+        throw audioErr;
+      }
+    }
+      const localVideo = document.getElementById("localVideo") as HTMLVideoElement;
+      if (localVideo) {
+        localVideo.srcObject = this.localStream;
+
+        const audioTrack = this.localStream.getAudioTracks()[0];
+        const videoTrack = this.localStream.getVideoTracks()[0];
+
+        this.isAudioEnabled$.update(audioTrack ? audioTrack.enabled : false);
+        this.isVideoEnabled$.update(videoTrack ? videoTrack.enabled : false);
+      }
+  }
+
+  toggleAudio() {
+    if (!this.localStream) return;
+
+    const audioTrack = this.localStream.getTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+
+      this.isAudioEnabled$.update(audioTrack.enabled);
+
+      this.chatSession?.send(`CMD:AUDIO:${audioTrack.enabled ? "ON" : "OFF"}`);
+    }
+  }
+
+  toggleVideo() {
+    if (!this.localStream) return;
+
+    const videoTrack = this.localStream.getVideoTracks()[0];
+
+    if (videoTrack) {
+      videoTrack.enabled = !videoTrack.enabled;
+      this.isVideoEnabled$.update(videoTrack.enabled);
+
+      this.chatSession?.send(`CMD:VIDEO:${videoTrack.enabled ? "ON" : "OFF"}`);
+    }
+  }
+
+  private async startChat(roomId: string, role: "host" | "guest") {
     this.disconnectChat();
     this.chatMessages = [];
     this.template.detectChanges();
 
+    // Turn on the camera BEFORE connecting to the room
+    try {
+      await this.startCamera();
+    } catch (err) {
+      return;
+    }
+
     this.chatSession = new ChatSession(
       (message) => {
+
+        if (message.text.startsWith("CMD:")) {
+
+          if (message.from === "peer") {
+            const parts = message.text.split(":");
+            if (parts[1] === "AUDIO") this.isRemoteAudioEnabled$.update(parts[2] === "ON");
+            if (parts[1] === "VIDEO") this.isRemoteVideoEnabled$.update(parts[2] === "ON");
+          }
+          return;
+        }
+
         this.appendChatMessage(message);
       },
-      (status) => {
+
+        (status) => {
         this.chatStatus$.update(status);
+
+        if (status === "chat ready" || status === "open" || status === "connected") {
+          setTimeout(() => {
+            this.chatSession?.send(`CMD:AUDIO:${this.isAudioEnabled$.actual ? "ON" : "OFF"}`);
+            this.chatSession?.send(`CMD:VIDEO:${this.isVideoEnabled$.actual ? "ON" : "OFF"}`);
+          }, 500);
+        }
       },
+
+      this.localStream,
+
+      (remoteStream) => {
+        const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement;
+        if (remoteVideo) {
+          remoteVideo.srcObject = remoteStream;
+        }
+      }
     );
 
     const action = role === "host"

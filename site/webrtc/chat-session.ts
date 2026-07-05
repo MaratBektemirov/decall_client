@@ -26,6 +26,9 @@ export class ChatSession {
   constructor(
     private onMessage: (msg: ChatMessage) => void,
     private onStatus: (status: string) => void,
+
+    private localStream: MediaStream | null,
+    private onRemoteStream: (stream: MediaStream) => void
   ) {}
 
   async openRoom(roomId: string) {
@@ -71,6 +74,18 @@ export class ChatSession {
     });
 
     this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        this.pc?.addTrack(track, this.localStream!);
+      });
+    }
+
+    this.pc.ontrack = (event) => {
+      if (event.streams && event.streams.length > 0) {
+        this.onRemoteStream(event.streams[0]);
+      }
+    };
 
     this.pc.onicecandidate = (event) => {
       if (!event.candidate) return;
