@@ -17,6 +17,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
   callIdentity$ = this.newRx("");
   hasCallIdentity$ = this.newRx(false);
+  copyLabel$ = this.newRx("Copy ID");
   challengeLoading$ = this.newRx(false);
   challengeError$ = this.newRx("");
 
@@ -55,6 +56,13 @@ export class SecretAuthPageComponent extends AbstractComponent {
           <div class="${styles.identityField}">
             <span class="${styles.identityLabel}">Share this to receive a chat</span>
             <div class="${styles.identityEmojis}">{{ root.callIdentity$::rx }}</div>
+            <div style="margin-top: 12px; display: flex; justify-content: center;">
+                <button type="button"
+                 class="${k}_button ${k}_button-s ${k}_button-secondary"
+                 onclick="{{ root.copyCallID() }}">
+                 {{ root.copyLabel$::rx }}   
+                </button>
+                </div>
           </div>
           <p class="${styles.identityHint}">
             Same key always gives the same ID on every device.
@@ -174,6 +182,23 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.chatSession?.close();
     this.chatSession = null;
     this.chatStatus$.update("idle");
+  }
+
+  copyCallID() {
+    const id = this.callIdentity$.actual;
+    if (!id) return;
+
+    navigator.clipboard.writeText(id)
+        .then(() => {
+          this.copyLabel$.update("Copied! ✓");
+
+          setTimeout(() => {
+            this.copyLabel$.update("Copy ID");
+          }, 2000);
+        })
+        .catch((err) => {
+          console.error("Failed to copy ID: ", err);
+        });
   }
 
   private startChat(roomId: string, role: "host" | "guest") {
