@@ -9,6 +9,7 @@ import type { SecretAuthState } from "cruzo-web3";
 import { fetchAuthChallenge } from "site/services/auth-api";
 import { pubKeyToCallIdentity } from "site/utils/call-identity";
 import { runIdentityScramble } from "site/utils/identity-scramble";
+import { decallLog, formatDecallLogLine, subscribeDecallLog } from "site/utils/decall-log";
 import { ChatSession, type ChatMessage } from "site/webrtc/chat-session";
 import "site/web3-setup";
 
@@ -45,6 +46,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
   chatStatus$ = this.newRx("idle");
   chatConnected$ = this.newRx(false);
   inCall$ = this.newRx(false);
+  connectionLogText$ = this.newRx("");
   chatMessages: Rx<ChatMessage>[] = [];
   chatDraft$ = this.newRx("");
 
@@ -71,6 +73,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
   private authTransitionStarted = false;
   private pendingIdentity = "";
   private stopIdentityScramble?: () => void;
+  private unsubscribeDecallLog?: () => void;
+  private connectionLogLines: string[] = [];
 
   getHTML() {
     const k = UI_KIT;
@@ -122,23 +126,28 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 </div>
                 <div class="${styles.chatStatusBar}">
                   <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
-                  <button type="button"
-                    class="${k}_button ${k}_button-s ${k}_button-secondary"
-                    attached="{{ root.chatConnected$::rx }}"
-                    onclick="{{ root.disconnectChat() }}">Leave</button>
                 </div>
               </div>
 
               <div class="${styles.chatActions}">
                 <button type="button"
                   class="${k}_button ${k}_button-s ${k}_button-primary"
-                  disabled="{{ root.inCall$::rx }}"
+                  attached="{{ !root.inCall$::rx }}"
                   onclick="{{ root.openChatRoom() }}">Wait</button>
                 <button type="button"
                   class="${k}_button ${k}_button-s ${k}_button-primary"
                   attached="{{ !root.inCall$::rx }}"
                   onclick="{{ root.openCallModal() }}">Call</button>
+                <button type="button"
+                  class="${k}_button ${k}_button-s ${k}_button-secondary"
+                  attached="{{ root.inCall$::rx }}"
+                  onclick="{{ root.disconnectChat() }}">Leave</button>
               </div>
+
+              <details class="${styles.connectionLog}" attached="{{ root.inCall$::rx }}" open>
+                <summary class="${styles.connectionLogSummary}">Connection log</summary>
+                <pre class="${styles.connectionLogPre}">{{ root.connectionLogText$::rx }}</pre>
+              </details>
 
               <div class="${styles.videoGrid}">
                 <div class="${styles.videoTile}">
@@ -229,6 +238,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
   }
 
   connectedCallback() {
+    this.unsubscribeDecallLog = subscribeDecallLog((entry) => {
+      this.appendConnectionLog(entry);
+    });
+
     componentsRegistryService.connectBucket(this.innerBucket);
     this.innerBucket.setState("secretAuth", this.emptyAuthState());
     this.innerBucket.setValue("chatSpinner", SpinnerValue.inactive);
@@ -258,6 +271,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
   }
 
   disconnectedCallback() {
+    this.unsubscribeDecallLog?.();
+    this.unsubscribeDecallLog = undefined;
     this.stopIdentityScramble?.();
     this.stopIdentityScramble = undefined;
     this.disconnectChat();
@@ -307,6 +322,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
   }
 
   disconnectChat() {
+    decallLog("session", "User left call");
     this.chatSession?.close();
     this.chatSession = null;
     this.chatStatus$.update("idle");
@@ -338,24 +354,24 @@ export class SecretAuthPageComponent extends AbstractComponent {
   }
 
   private async startCamera() {
+    decallLog("media", "Requesting camera and microphone");
     try {
-      // trying to request access to the camera and audio
       this.localStream = await navigator.mediaDevices.getUserMedia({
         video: true,
-        audio: true
+        audio: true,
       });
+      decallLog("media", "Camera and microphone granted");
     } catch (err) {
-      console.warn("Camera not found or denied, falling back to audio only...", err);
+      decallLog("media", "Camera unavailable, trying audio only", err, "warn");
 
       try {
-        // if video unavailable, trying to request audio
         this.localStream = await navigator.mediaDevices.getUserMedia({
           video: false,
-          audio: true
+          audio: true,
         });
+        decallLog("media", "Microphone granted (audio only)");
       } catch (audioErr) {
-        // if audio unavailable (or user denied the request)
-        console.error("Failed to access microphone:", audioErr);
+        decallLog("media", "Microphone denied or unavailable", audioErr, "error");
         this.chatStatus$.update("media error");
         throw audioErr;
       }
@@ -401,10 +417,17 @@ export class SecretAuthPageComponent extends AbstractComponent {
   private async startChat(roomId: string, role: "host" | "guest") {
     this.disconnectChat();
     this.chatMessages = [];
+    this.clearConnectionLog();
     this.template.detectChanges();
     this.inCall$.update(true);
 
-    // Turn on the camera BEFORE connecting to the room
+    decallLog("session", `Starting call (${role})`, {
+      roomId,
+      apiBase: import.meta.env.VITE_API_BASE ?? "/api",
+      online: navigator.onLine,
+      userAgent: navigator.userAgent,
+    });
+
     try {
       await this.startCamera();
     } catch (err) {
@@ -456,9 +479,23 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
     action.catch((err: unknown) => {
       const text = err instanceof Error ? err.message : "chat connection failed";
+      decallLog("session", "Call start failed", err, "error");
       this.appendChatMessage({ from: "system", text });
       this.chatStatus$.update("error");
     });
+  }
+
+  private appendConnectionLog(entry: Parameters<typeof formatDecallLogLine>[0]) {
+    this.connectionLogLines = [...this.connectionLogLines, formatDecallLogLine(entry)];
+    if (this.connectionLogLines.length > 200) {
+      this.connectionLogLines = this.connectionLogLines.slice(-200);
+    }
+    this.connectionLogText$.update(this.connectionLogLines.join("\n"));
+  }
+
+  private clearConnectionLog() {
+    this.connectionLogLines = [];
+    this.connectionLogText$.update("");
   }
 
   private appendChatMessage(message: ChatMessage) {
