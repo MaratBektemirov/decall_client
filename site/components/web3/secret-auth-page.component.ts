@@ -123,37 +123,34 @@ export class SecretAuthPageComponent extends AbstractComponent {
           <div class="${styles.postAuthInner} {{ root.postAuthEntering$::rx ? '${styles.postAuthEnter}' : '${styles.postAuthHidden}' }}">
             <div class="${styles.chatCard}">
               <div class="${styles.identityHead}">
-                <div class="${styles.chatHeadBrand}">
-                  <img class="${styles.chatLogo}" src="${LOGO_SRC}" alt="Decall">
-                  <div class="${styles.chatHeadText}">
-                    <span class="${styles.chatBrandTitle}">Decentralized calls</span>
-                    <div class="${styles.chatIdentityRow}">
-                      <span class="${styles.chatIdentityId}">{{ root.displayIdentity$::rx }}</span>
-                      <button type="button"
-                        class="${k}_button ${k}_button-s ${k}_button-secondary"
-                        onclick="{{ root.copyCallID() }}">
-                        {{ root.copyLabel$::rx }}
-                      </button>
+                <img class="${styles.chatLogo}" src="${LOGO_SRC}" alt="Decall">
+                <div class="${styles.chatHeadInfo}">
+                  <div class="${styles.chatStatusBar}">
+                    <div class="${styles.chatStatusGroup}">
+                      <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
+                      <div class="${styles.chatStatusSpinner}"
+                        attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}"
+                        is="spinner"
+                        component-id="chatSpinner"
+                        bucket-id="${this.innerBucket.id}">
+                        <div class="${styles.chatStatusSpinnerSlot}"></div>
+                      </div>
                     </div>
+                    <span class="${styles.chatTransport} ${styles.chatTransportP2p}"
+                      attached="{{ root.connectionMode$::rx === 'P2P' }}"
+                      title="Direct peer connection (host or STUN)">P2P</span>
+                    <span class="${styles.chatTransport} ${styles.chatTransportTurn}"
+                      attached="{{ root.connectionMode$::rx === 'TURN' }}"
+                      title="Media relayed via TURN server">TURN</span>
                   </div>
-                </div>
-                <div class="${styles.chatStatusBar}">
-                  <div class="${styles.chatStatusGroup}">
-                    <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
-                    <div class="${styles.chatStatusSpinner}"
-                      attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}"
-                      is="spinner"
-                      component-id="chatSpinner"
-                      bucket-id="${this.innerBucket.id}">
-                      <div class="${styles.chatStatusSpinnerSlot}"></div>
-                    </div>
+                  <div class="${styles.chatIdentityRow}">
+                    <span class="${styles.chatIdentityId}">{{ root.displayIdentity$::rx }}</span>
+                    <button type="button"
+                      class="${k}_button ${k}_button-s ${k}_button-secondary"
+                      onclick="{{ root.copyCallID() }}">
+                      {{ root.copyLabel$::rx }}
+                    </button>
                   </div>
-                  <span class="${styles.chatTransport} ${styles.chatTransportP2p}"
-                    attached="{{ root.connectionMode$::rx === 'P2P' }}"
-                    title="Direct peer connection (host or STUN)">P2P</span>
-                  <span class="${styles.chatTransport} ${styles.chatTransportTurn}"
-                    attached="{{ root.connectionMode$::rx === 'TURN' }}"
-                    title="Media relayed via TURN server">TURN</span>
                 </div>
               </div>
 
@@ -172,38 +169,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
                   onclick="{{ root.disconnectChat() }}">Leave</button>
               </div>
 
-              <details class="${styles.connectionLog}" attached="{{ root.inCall$::rx }}">
-                <summary class="${styles.connectionLogSummary}">Connection log</summary>
-                <pre class="${styles.connectionLogPre}">{{ root.connectionLogText$::rx }}</pre>
-              </details>
-
-              <div class="${styles.videoGrid}">
-                <div class="${styles.videoTile}">
-                  <video id="localVideo" class="${styles.video}" autoplay playsinline muted></video>
-                  <div class="${styles.videoOverlay}">
-                    <div class="${styles.videoBadge}" attached="{{ !root.isAudioEnabled$::rx }}">
-                      <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
-                    </div>
-                    <div class="${styles.videoBadge}" attached="{{ !root.isVideoEnabled$::rx }}">
-                      <video-off-icon class="${styles.videoBadgeIcon}"></video-off-icon>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="${styles.videoTile}">
-                  <video id="remoteVideo" class="${styles.video}" autoplay playsinline></video>
-                  <div class="${styles.videoOverlay}">
-                    <div class="${styles.videoBadge}" attached="{{ !root.isRemoteAudioEnabled$::rx }}">
-                      <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
-                    </div>
-                    <div class="${styles.videoBadge}" attached="{{ !root.isRemoteVideoEnabled$::rx }}">
-                      <video-off-icon class="${styles.videoBadgeIcon}"></video-off-icon>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="${styles.mediaControls}">
+              <div class="${styles.mediaControls}" attached="{{ !root.inCall$::rx }}">
                 <button type="button"
                   class="${styles.mediaButton}"
                   aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
@@ -220,8 +186,13 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 </button>
               </div>
 
-              <div class="${styles.chatMessenger}">
-                <div class="${styles.messages}" attached="{{ root.chatConnected$::rx }}">
+              <details class="${styles.connectionLog}" attached="{{ root.inCall$::rx }}">
+                <summary class="${styles.connectionLogSummary}">Connection log</summary>
+                <pre class="${styles.connectionLogPre}">{{ root.connectionLogText$::rx }}</pre>
+              </details>
+
+              <div class="${styles.chatMessenger}" attached="{{ root.chatConnected$::rx }}">
+                <div class="${styles.messages}">
                   <div repeat="{{ root.chatMessages }}" class="${styles.messageRow}">
                     <div class="${styles.message} ${styles.messageMe}" attached="{{ this::rx.from === 'me' }}">{{ this::rx.text }}</div>
                     <div class="${styles.message} ${styles.messagePeer}" attached="{{ this::rx.from === 'peer' }}">{{ this::rx.text }}</div>
@@ -229,7 +200,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
                   </div>
                 </div>
 
-                <div class="${styles.composeRow}" attached="{{ root.chatConnected$::rx }}">
+                <div class="${styles.composeRow}">
                   <textarea
                     class="${k}_textarea ${styles.chatInput}"
                     placeholder="Message"
@@ -238,6 +209,53 @@ export class SecretAuthPageComponent extends AbstractComponent {
                   <button type="button"
                     class="${k}_button ${k}_button-s ${k}_button-primary"
                     onclick="{{ root.sendChat() }}">Send</button>
+                </div>
+              </div>
+
+              <div class="${styles.videoModalBackdrop} {{ root.inCall$::rx ? styles.videoModalOpen : '' }}">
+                <div class="${styles.videoModal}">
+                  <div class="${styles.videoGrid}">
+                    <div class="${styles.videoTile}">
+                      <video id="localVideo" class="${styles.video}" autoplay playsinline muted></video>
+                      <div class="${styles.videoOverlay}">
+                        <div class="${styles.videoBadge}" attached="{{ !root.isAudioEnabled$::rx }}">
+                          <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
+                        </div>
+                        <div class="${styles.videoBadge}" attached="{{ !root.isVideoEnabled$::rx }}">
+                          <video-off-icon class="${styles.videoBadgeIcon}"></video-off-icon>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="${styles.videoTile}">
+                      <video id="remoteVideo" class="${styles.video}" autoplay playsinline></video>
+                      <div class="${styles.videoOverlay}">
+                        <div class="${styles.videoBadge}" attached="{{ !root.isRemoteAudioEnabled$::rx }}">
+                          <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
+                        </div>
+                        <div class="${styles.videoBadge}" attached="{{ !root.isRemoteVideoEnabled$::rx }}">
+                          <video-off-icon class="${styles.videoBadgeIcon}"></video-off-icon>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="${styles.mediaControls}">
+                    <button type="button"
+                      class="${styles.mediaButton}"
+                      aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
+                      onclick="{{ root.toggleVideo() }}">
+                      <video-icon class="${styles.mediaIcon}" attached="{{ root.isVideoEnabled$::rx }}"></video-icon>
+                      <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isVideoEnabled$::rx }}"></video-off-icon>
+                    </button>
+                    <button type="button"
+                      class="${styles.mediaButton}"
+                      aria-label="{{ root.isAudioEnabled$::rx ? 'Turn microphone off' : 'Turn microphone on' }}"
+                      onclick="{{ root.toggleAudio() }}">
+                      <microphone-icon class="${styles.mediaIcon}" attached="{{ root.isAudioEnabled$::rx }}"></microphone-icon>
+                      <microphone-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isAudioEnabled$::rx }}"></microphone-off-icon>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
