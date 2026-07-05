@@ -30,7 +30,7 @@ cd ../decall_server && make dev
 2. **Your ID** — four emojis derived from your public key.
 3. **Host** — open a room (room id = your Call ID).
 4. **Guest** — paste the host’s Call ID and join.
-5. **Chat** — messages over WebRTC data channel; server only signals.
+5. **Chat** — messages over WebRTC data channel; server only signals. TURN credentials (`POST /api/turn-credentials`) are fetched automatically before each call when P2P is blocked.
 
 ## Scripts
 

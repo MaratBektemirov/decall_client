@@ -6,6 +6,7 @@ import {
   hintForSignalFailure,
   iceCandidateType,
 } from "site/utils/decall-log";
+import { detectIceTransportMode, type IceTransportMode } from "site/utils/ice-transport";
 
 export type ChatMessage = {
   from: "me" | "peer" | "system";
@@ -20,7 +21,7 @@ type SignalMessage = {
   message?: string;
 };
 
-const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+const FALLBACK_ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
 let sessionCounter = 0;
 
@@ -33,17 +34,22 @@ export class ChatSession {
   private role: "host" | "guest" = "guest";
   private pendingIce: RTCIceCandidateInit[] = [];
   private iceCandidateTypes = new Set<string>();
+  private transportMode: IceTransportMode | null = null;
+  private transportCheckTimer = 0;
+  private transportCheckAttempts = 0;
   private closed = false;
 
   constructor(
     private onMessage: (msg: ChatMessage) => void,
     private onStatus: (status: string) => void,
+    private onTransportMode: (mode: IceTransportMode | "") => void,
     private localStream: MediaStream | null,
     private onRemoteStream: (stream: MediaStream) => void,
+    private resolveIceServers: () => Promise<RTCIceServer[]>,
   ) {
     sessionCounter += 1;
     this.sessionId = `s${sessionCounter}`;
-    this.log("session", `ChatSession created (STUN: ${ICE_SERVERS[0]?.urls})`);
+    this.log("session", "ChatSession created");
   }
 
   async openRoom(roomId: string) {
@@ -84,6 +90,9 @@ export class ChatSession {
     this.roomId = "";
     this.pendingIce = [];
     this.iceCandidateTypes.clear();
+    this.stopTransportMonitoring();
+    this.transportMode = null;
+    this.onTransportMode("");
   }
 
   private log(
@@ -136,8 +145,21 @@ export class ChatSession {
       throw err;
     }
 
-    this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    this.log("webrtc", "RTCPeerConnection created", { iceServers: ICE_SERVERS });
+    let iceServers: RTCIceServer[];
+    try {
+      iceServers = await this.resolveIceServers();
+    } catch (err) {
+      this.log("api", "Failed to load TURN credentials, using STUN fallback", err, "warn");
+      iceServers = FALLBACK_ICE_SERVERS;
+    }
+
+    this.pc = new RTCPeerConnection({ iceServers });
+    this.log("webrtc", "RTCPeerConnection created", {
+      iceServers: iceServers.map((server) => ({
+        urls: server.urls,
+        hasCredential: Boolean(server.username && server.credential),
+      })),
+    });
 
     if (this.localStream) {
       const tracks = this.localStream.getTracks().map((t) => `${t.kind}:${t.label}`);
@@ -207,6 +229,7 @@ export class ChatSession {
 
       if (state === "connected") {
         this.onStatus("connected");
+        this.startTransportMonitoring();
         return;
       }
 
@@ -391,5 +414,42 @@ export class ChatSession {
     }
 
     this.ws.send(JSON.stringify({ ...payload, roomId: this.roomId }));
+  }
+
+  private stopTransportMonitoring() {
+    window.clearTimeout(this.transportCheckTimer);
+    this.transportCheckTimer = 0;
+    this.transportCheckAttempts = 0;
+  }
+
+  private startTransportMonitoring() {
+    this.stopTransportMonitoring();
+    this.transportCheckAttempts = 0;
+    void this.refreshTransportMode();
+  }
+
+  private async refreshTransportMode() {
+    if (!this.pc || this.closed || this.pc.connectionState !== "connected") return;
+
+    const mode = await detectIceTransportMode(this.pc);
+    if (!mode || this.closed) {
+      if (this.transportCheckAttempts < 12) {
+        this.transportCheckAttempts += 1;
+        this.transportCheckTimer = window.setTimeout(() => {
+          void this.refreshTransportMode();
+        }, 500);
+      }
+      return;
+    }
+
+    if (mode !== this.transportMode) {
+      this.transportMode = mode;
+      this.log("ice", `Active transport: ${mode === "turn" ? "TURN relay" : "P2P direct"}`, {
+        priority: "host/srflx before relay",
+      });
+      this.onTransportMode(mode);
+    }
+
+    this.stopTransportMonitoring();
   }
 }

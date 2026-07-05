@@ -1,3 +1,7 @@
+import { MicrophoneIcon } from "site/icons/microphone";
+import { MicrophoneOffIcon } from "site/icons/microphone-off";
+import { VideoIcon } from "site/icons/video";
+import { VideoOffIcon } from "site/icons/video-off";
 import styles from "./secret-auth-page.module.css";
 
 import { AbstractComponent, componentsRegistryService, Rx, RxBucket } from "cruzo";
@@ -7,6 +11,7 @@ import { SecretAuthComponent } from "cruzo-web3/components/secret-auth";
 import type { SecretAuthState } from "cruzo-web3";
 
 import { fetchAuthChallenge } from "site/services/auth-api";
+import { fetchTurnIceServers } from "site/services/ice-servers";
 import { pubKeyToCallIdentity } from "site/utils/call-identity";
 import { runIdentityScramble } from "site/utils/identity-scramble";
 import { decallLog, formatDecallLogLine, subscribeDecallLog } from "site/utils/decall-log";
@@ -21,7 +26,14 @@ const CHAT_CONNECTED_STATUSES = new Set(["chat ready", "open", "connected"]);
 export class SecretAuthPageComponent extends AbstractComponent {
   static selector = "secret-auth-page-component";
 
-  dependencies = new Set([SecretAuthComponent.selector, SpinnerComponent.selector]);
+  dependencies = new Set([
+    SecretAuthComponent.selector,
+    SpinnerComponent.selector,
+    VideoIcon.selector,
+    VideoOffIcon.selector,
+    MicrophoneIcon.selector,
+    MicrophoneOffIcon.selector,
+  ]);
 
   callIdentity$ = this.newRx("");
   displayIdentity$ = this.newRx("");
@@ -44,6 +56,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
   joinCallId$ = this.newRx("");
   callModalOpen$ = this.newRx(false);
   chatStatus$ = this.newRx("idle");
+  connectionMode$ = this.newRx("");
   chatConnected$ = this.newRx(false);
   inCall$ = this.newRx(false);
   connectionLogText$ = this.newRx("");
@@ -126,6 +139,12 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 </div>
                 <div class="${styles.chatStatusBar}">
                   <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
+                  <span class="${styles.chatTransport} ${styles.chatTransportP2p}"
+                    attached="{{ root.connectionMode$::rx === 'P2P' }}"
+                    title="Direct peer connection (host or STUN)">P2P</span>
+                  <span class="${styles.chatTransport} ${styles.chatTransportTurn}"
+                    attached="{{ root.connectionMode$::rx === 'TURN' }}"
+                    title="Media relayed via TURN server">TURN</span>
                 </div>
               </div>
 
@@ -144,7 +163,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
                   onclick="{{ root.disconnectChat() }}">Leave</button>
               </div>
 
-              <details class="${styles.connectionLog}" attached="{{ root.inCall$::rx }}" open>
+              <details class="${styles.connectionLog}" attached="{{ root.inCall$::rx }}">
                 <summary class="${styles.connectionLogSummary}">Connection log</summary>
                 <pre class="${styles.connectionLogPre}">{{ root.connectionLogText$::rx }}</pre>
               </details>
@@ -153,32 +172,44 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 <div class="${styles.videoTile}">
                   <video id="localVideo" class="${styles.video}" autoplay playsinline muted></video>
                   <div class="${styles.videoOverlay}">
-                    <div class="${styles.videoBadge}" attached="{{ !root.isAudioEnabled$::rx }}">🔇</div>
-                    <div class="${styles.videoBadge}" attached="{{ !root.isVideoEnabled$::rx }}">🚫</div>
+                    <div class="${styles.videoBadge}" attached="{{ !root.isAudioEnabled$::rx }}">
+                      <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
+                    </div>
+                    <div class="${styles.videoBadge}" attached="{{ !root.isVideoEnabled$::rx }}">
+                      <video-off-icon class="${styles.videoBadgeIcon}"></video-off-icon>
+                    </div>
                   </div>
                 </div>
 
                 <div class="${styles.videoTile}">
                   <video id="remoteVideo" class="${styles.video}" autoplay playsinline></video>
                   <div class="${styles.videoOverlay}">
-                    <div class="${styles.videoBadge}" attached="{{ !root.isRemoteAudioEnabled$::rx }}">🔇</div>
-                    <div class="${styles.videoBadge}" attached="{{ !root.isRemoteVideoEnabled$::rx }}">🚫</div>
+                    <div class="${styles.videoBadge}" attached="{{ !root.isRemoteAudioEnabled$::rx }}">
+                      <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
+                    </div>
+                    <div class="${styles.videoBadge}" attached="{{ !root.isRemoteVideoEnabled$::rx }}">
+                      <video-off-icon class="${styles.videoBadgeIcon}"></video-off-icon>
+                    </div>
                   </div>
                 </div>
               </div>
 
               <div class="${styles.mediaControls}">
                 <button type="button"
-                  class="${k}_button ${k}_button-s ${k}_button-secondary"
+                  class="${styles.mediaButton}"
                   disabled="{{ !root.inCall$::rx }}"
+                  aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
                   onclick="{{ root.toggleVideo() }}">
-                  {{ root.isVideoEnabled$::rx ? 'Camera Off' : 'Camera On' }}
+                  <video-icon class="${styles.mediaIcon}" attached="{{ root.isVideoEnabled$::rx }}"></video-icon>
+                  <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isVideoEnabled$::rx }}"></video-off-icon>
                 </button>
                 <button type="button"
-                  class="${k}_button ${k}_button-s ${k}_button-secondary"
+                  class="${styles.mediaButton}"
                   disabled="{{ !root.inCall$::rx }}"
+                  aria-label="{{ root.isAudioEnabled$::rx ? 'Turn microphone off' : 'Turn microphone on' }}"
                   onclick="{{ root.toggleAudio() }}">
-                  {{ root.isAudioEnabled$::rx ? 'Audio Off' : 'Audio On' }}
+                  <microphone-icon class="${styles.mediaIcon}" attached="{{ root.isAudioEnabled$::rx }}"></microphone-icon>
+                  <microphone-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isAudioEnabled$::rx }}"></microphone-off-icon>
                 </button>
               </div>
 
@@ -326,6 +357,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.chatSession?.close();
     this.chatSession = null;
     this.chatStatus$.update("idle");
+    this.connectionMode$.update("");
     this.chatConnected$.update(false);
     this.inCall$.update(false);
 
@@ -435,6 +467,14 @@ export class SecretAuthPageComponent extends AbstractComponent {
       return;
     }
 
+    const proof = this.secretAuthState$.actual?.proof;
+    if (!proof) {
+      this.inCall$.update(false);
+      this.appendChatMessage({ from: "system", text: "Sign in before starting a call" });
+      this.chatStatus$.update("error");
+      return;
+    }
+
     this.chatSession = new ChatSession(
       (message) => {
 
@@ -463,6 +503,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
         }
       },
 
+      (mode) => {
+        this.connectionMode$.update(mode === "p2p" ? "P2P" : mode === "turn" ? "TURN" : "");
+      },
+
       this.localStream,
 
       (remoteStream) => {
@@ -470,7 +514,9 @@ export class SecretAuthPageComponent extends AbstractComponent {
         if (remoteVideo) {
           remoteVideo.srcObject = remoteStream;
         }
-      }
+      },
+
+      () => fetchTurnIceServers(proof),
     );
 
     const action = role === "host"
