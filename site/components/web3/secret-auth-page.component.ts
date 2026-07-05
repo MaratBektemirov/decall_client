@@ -48,13 +48,16 @@ export class SecretAuthPageComponent extends AbstractComponent {
   isAudioEnabled$ = this.newRx(false);
   isVideoEnabled$ = this.newRx(false);
   // states for the remote user
-  isRemoteAudioEnabled$ = this.newRx(true);
-  isRemoteVideoEnabled$ = this.newRx(true);
+  isRemoteAudioEnabled$ = this.newRx(false);
+  isRemoteVideoEnabled$ = this.newRx(false);
   challengeLoading$ = this.newRx(false);
   challengeError$ = this.newRx("");
 
   joinCallId$ = this.newRx("");
   callModalOpen$ = this.newRx(false);
+  joinRequestOpen$ = this.newRx(false);
+  joinRequestCallId$ = this.newRx("");
+  videoModalOpen$ = this.newRx(false);
   chatStatus$ = this.newRx("idle");
   connectionMode$ = this.newRx("");
   chatConnected$ = this.newRx(false);
@@ -62,6 +65,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
   connectionLogText$ = this.newRx("");
   chatMessages: Rx<ChatMessage>[] = [];
   chatDraft$ = this.newRx("");
+  peerTyping$ = this.newRx(false);
 
   innerBucket = new RxBucket({
     secretAuth: {
@@ -88,6 +92,9 @@ export class SecretAuthPageComponent extends AbstractComponent {
   private stopIdentityScramble?: () => void;
   private unsubscribeDecallLog?: () => void;
   private connectionLogLines: string[] = [];
+  private typingStopTimer = 0;
+  private peerTypingTimer = 0;
+  private typingActive = false;
 
   getHTML() {
     const k = UI_KIT;
@@ -166,14 +173,14 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 <button type="button"
                   class="${k}_button ${k}_button-s ${k}_button-secondary"
                   attached="{{ root.inCall$::rx }}"
-                  onclick="{{ root.disconnectChat() }}">Leave</button>
+                  onclick="{{ root.disconnectChat() }}">Disconnect</button>
               </div>
 
-              <div class="${styles.mediaControls}" attached="{{ !root.inCall$::rx }}">
+              <div class="${styles.mediaControls}">
                 <button type="button"
                   class="${styles.mediaButton}"
-                  aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
-                  onclick="{{ root.toggleVideo() }}">
+                  aria-label="Open video"
+                  onclick="{{ root.openVideoModal() }}">
                   <video-icon class="${styles.mediaIcon}" attached="{{ root.isVideoEnabled$::rx }}"></video-icon>
                   <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isVideoEnabled$::rx }}"></video-off-icon>
                 </button>
@@ -200,64 +207,102 @@ export class SecretAuthPageComponent extends AbstractComponent {
                   </div>
                 </div>
 
+                <div class="${styles.typingRow}" attached="{{ root.peerTyping$::rx }}">
+                  <div class="${styles.typingBubble}">
+                    <span class="${styles.typingDot}"></span>
+                    <span class="${styles.typingDot}"></span>
+                    <span class="${styles.typingDot}"></span>
+                  </div>
+                </div>
+
                 <div class="${styles.composeRow}">
                   <textarea
                     class="${k}_textarea ${styles.chatInput}"
                     placeholder="Message"
                     value="{{ root.chatDraft$::rx }}"
-                    oninput="{{ root.chatDraft$.update(event.target.value) }}"></textarea>
+                    oninput="{{ root.onChatInput(event.target.value) }}"></textarea>
                   <button type="button"
                     class="${k}_button ${k}_button-s ${k}_button-primary"
                     onclick="{{ root.sendChat() }}">Send</button>
                 </div>
               </div>
 
-              <div class="${styles.videoModalBackdrop} {{ root.inCall$::rx ? styles.videoModalOpen : '' }}">
-                <div class="${styles.videoModal}">
-                  <div class="${styles.videoGrid}">
-                    <div class="${styles.videoTile}">
-                      <video id="localVideo" class="${styles.video}" autoplay playsinline muted></video>
-                      <div class="${styles.videoOverlay}">
-                        <div class="${styles.videoBadge}" attached="{{ !root.isAudioEnabled$::rx }}">
-                          <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
-                        </div>
-                        <div class="${styles.videoBadge}" attached="{{ !root.isVideoEnabled$::rx }}">
-                          <video-off-icon class="${styles.videoBadgeIcon}"></video-off-icon>
-                        </div>
-                      </div>
-                    </div>
+              <div class="${styles.videoModalBackdrop} {{ root.videoModalOpen$::rx ? styles.videoModalOpen : '' }}"
+                onclick="{{ root.closeVideoModal(event) }}">
+                <div class="${styles.videoStage}" onclick="event.stopPropagation()">
+                  <video id="remoteVideo" class="${styles.remoteVideo}" autoplay playsinline></video>
+                  <div class="${styles.remoteVideoPlaceholder}"
+                    attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}">
+                    <span class="${styles.remoteVideoPlaceholderText}">Waiting for peer…</span>
+                  </div>
+                  <div class="${styles.remoteVideoPlaceholder}"
+                    attached="{{ root.chatConnected$::rx && !root.isRemoteVideoEnabled$::rx }}">
+                    <span class="${styles.remoteVideoPlaceholderText}">Camera off</span>
+                  </div>
 
-                    <div class="${styles.videoTile}">
-                      <video id="remoteVideo" class="${styles.video}" autoplay playsinline></video>
-                      <div class="${styles.videoOverlay}">
-                        <div class="${styles.videoBadge}" attached="{{ !root.isRemoteAudioEnabled$::rx }}">
-                          <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
-                        </div>
-                        <div class="${styles.videoBadge}" attached="{{ !root.isRemoteVideoEnabled$::rx }}">
-                          <video-off-icon class="${styles.videoBadgeIcon}"></video-off-icon>
-                        </div>
+                  <div class="${styles.localPip}">
+                    <video id="localVideo" class="${styles.localVideo}" autoplay playsinline muted></video>
+                    <div class="${styles.localPipPlaceholder}" attached="{{ !root.isVideoEnabled$::rx }}">
+                      <video-off-icon class="${styles.localPipPlaceholderIcon}"></video-off-icon>
+                    </div>
+                    <div class="${styles.pipBadges}">
+                      <div class="${styles.videoBadge}" attached="{{ !root.isAudioEnabled$::rx }}">
+                        <microphone-off-icon class="${styles.videoBadgeIcon}"></microphone-off-icon>
                       </div>
                     </div>
                   </div>
 
-                  <div class="${styles.mediaControls}">
+                  <div class="${styles.videoTopBar}">
+                    <span class="${styles.videoStatus}">{{ root.chatStatus$::rx }}</span>
                     <button type="button"
-                      class="${styles.mediaButton}"
+                      class="${styles.videoCloseButton}"
+                      aria-label="Close video"
+                      onclick="{{ root.closeVideoModal() }}">✕</button>
+                  </div>
+
+                  <div class="${styles.videoControlsBar}">
+                    <button type="button"
+                      class="${styles.mediaButton} ${styles.mediaButtonDark}"
                       aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
                       onclick="{{ root.toggleVideo() }}">
                       <video-icon class="${styles.mediaIcon}" attached="{{ root.isVideoEnabled$::rx }}"></video-icon>
                       <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isVideoEnabled$::rx }}"></video-off-icon>
                     </button>
                     <button type="button"
-                      class="${styles.mediaButton}"
+                      class="${styles.mediaButton} ${styles.mediaButtonDark}"
                       aria-label="{{ root.isAudioEnabled$::rx ? 'Turn microphone off' : 'Turn microphone on' }}"
                       onclick="{{ root.toggleAudio() }}">
                       <microphone-icon class="${styles.mediaIcon}" attached="{{ root.isAudioEnabled$::rx }}"></microphone-icon>
                       <microphone-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isAudioEnabled$::rx }}"></microphone-off-icon>
                     </button>
+                    <button type="button"
+                      class="${styles.mediaButton} ${styles.mediaButtonDanger}"
+                      aria-label="Disconnect"
+                      attached="{{ root.inCall$::rx }}"
+                      onclick="{{ root.disconnectChat() }}">
+                      <span class="${styles.disconnectIcon}"></span>
+                    </button>
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="${styles.callModalBackdrop}"
+          attached="{{ root.joinRequestOpen$::rx }}">
+          <div class="${styles.joinRequestModal}">
+            <p class="${styles.joinRequestText}">
+              User <strong class="${styles.joinRequestId}">{{ root.joinRequestCallId$::rx }}</strong>
+              wants to join your call.
+            </p>
+            <div class="${styles.joinRequestActions}">
+              <button type="button"
+                class="${k}_button ${k}_button-s ${k}_button-primary"
+                onclick="{{ root.acceptJoinRequest() }}">Allow</button>
+              <button type="button"
+                class="${k}_button ${k}_button-s ${k}_button-secondary"
+                onclick="{{ root.rejectJoinRequest() }}">Decline</button>
             </div>
           </div>
         </div>
@@ -323,6 +368,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.unsubscribeDecallLog = undefined;
     this.stopIdentityScramble?.();
     this.stopIdentityScramble = undefined;
+    this.clearTypingTimers();
     this.disconnectChat();
     super.disconnectedCallback();
   }
@@ -364,22 +410,113 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.joinChatRoom();
   }
 
+  acceptJoinRequest() {
+    this.chatSession?.acceptJoinRequest();
+    this.joinRequestOpen$.update(false);
+  }
+
+  rejectJoinRequest() {
+    this.chatSession?.rejectJoinRequest();
+    this.joinRequestOpen$.update(false);
+  }
+
   sendChat() {
+    this.stopTypingNotify();
     this.chatSession?.send(this.chatDraft$.actual ?? "");
     this.chatDraft$.update("");
   }
 
+  onChatInput(value: string) {
+    this.chatDraft$.update(value);
+    if (!this.chatConnected$.actual || !this.chatSession) return;
+
+    if (value.trim()) {
+      this.startTypingNotify();
+    } else {
+      this.stopTypingNotify();
+    }
+  }
+
+  private startTypingNotify() {
+    if (!this.typingActive) {
+      this.chatSession?.send("CMD:TYPING:ON");
+      this.typingActive = true;
+    }
+
+    window.clearTimeout(this.typingStopTimer);
+    this.typingStopTimer = window.setTimeout(() => {
+      this.stopTypingNotify();
+    }, 2000);
+  }
+
+  private stopTypingNotify() {
+    window.clearTimeout(this.typingStopTimer);
+    this.typingStopTimer = 0;
+    if (!this.typingActive) return;
+    this.chatSession?.send("CMD:TYPING:OFF");
+    this.typingActive = false;
+  }
+
+  private setPeerTyping(active: boolean) {
+    this.peerTyping$.update(active);
+    window.clearTimeout(this.peerTypingTimer);
+    this.peerTypingTimer = 0;
+
+    if (active) {
+      this.peerTypingTimer = window.setTimeout(() => {
+        this.peerTyping$.update(false);
+      }, 3000);
+    }
+  }
+
+  private clearTypingTimers() {
+    this.stopTypingNotify();
+    window.clearTimeout(this.peerTypingTimer);
+    this.peerTypingTimer = 0;
+    this.peerTyping$.update(false);
+  }
+
   disconnectChat() {
-    decallLog("session", "User left call");
+    decallLog("session", "User disconnected call");
+    this.closeVideoModal();
+    this.joinRequestOpen$.update(false);
+    this.clearTypingTimers();
     this.chatSession?.close();
     this.chatSession = null;
     this.chatStatus$.update("idle");
     this.connectionMode$.update("");
     this.chatConnected$.update(false);
     this.inCall$.update(false);
+    this.isRemoteAudioEnabled$.update(false);
+    this.isRemoteVideoEnabled$.update(false);
 
     const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
     if (remoteVideo) remoteVideo.srcObject = null;
+    this.stopLocalMedia();
+  }
+
+  openVideoModal() {
+    this.videoModalOpen$.update(true);
+    this.template.detectChanges();
+    requestAnimationFrame(() => this.bindVideoElements());
+  }
+
+  closeVideoModal(event?: Event) {
+    if (event && event.target !== event.currentTarget) return;
+    this.videoModalOpen$.update(false);
+  }
+
+  private bindVideoElements() {
+    const localVideo = document.getElementById("localVideo") as HTMLVideoElement | null;
+    if (localVideo && this.localStream) {
+      localVideo.srcObject = this.localStream;
+    }
+
+    const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
+    const remoteStream = remoteVideo?.srcObject as MediaStream | null;
+    if (remoteVideo && remoteStream) {
+      remoteVideo.srcObject = remoteStream;
+    }
   }
 
   private stopLocalMedia() {
@@ -396,15 +533,9 @@ export class SecretAuthPageComponent extends AbstractComponent {
   }
 
   private bindLocalPreview() {
-    const localVideo = document.getElementById("localVideo") as HTMLVideoElement | null;
-    if (localVideo) {
-      localVideo.srcObject = this.localStream;
-    }
-
-    const audioTrack = this.localStream?.getAudioTracks()[0];
-    const videoTrack = this.localStream?.getVideoTracks()[0];
-    this.isAudioEnabled$.update(Boolean(audioTrack?.enabled));
-    this.isVideoEnabled$.update(Boolean(videoTrack?.enabled));
+    this.bindVideoElements();
+    this.isAudioEnabled$.update(Boolean(this.localStream?.getAudioTracks()[0]?.enabled));
+    this.isVideoEnabled$.update(Boolean(this.localStream?.getVideoTracks()[0]?.enabled));
   }
 
   private syncMediaCommand(kind: "AUDIO" | "VIDEO", enabled: boolean) {
@@ -412,11 +543,16 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.chatSession.send(`CMD:${kind}:${enabled ? "ON" : "OFF"}`);
   }
 
-  private async ensureMediaTrack(kind: "audio" | "video"): Promise<MediaStreamTrack | null> {
+  private async ensureMediaTrack(kind: "audio" | "video", enable = true): Promise<MediaStreamTrack | null> {
     const existing = kind === "audio"
       ? this.localStream?.getAudioTracks()[0]
       : this.localStream?.getVideoTracks()[0];
-    if (existing) return existing;
+    if (existing) {
+      existing.enabled = enable;
+      return existing;
+    }
+
+    if (!enable) return null;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -425,6 +561,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
       });
       const track = kind === "audio" ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
       if (!track) return null;
+
+      track.enabled = true;
 
       if (!this.localStream) {
         this.localStream = new MediaStream();
@@ -446,15 +584,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
     }
   }
 
-  private async ensureLocalMedia() {
-    if (this.localStream) {
-      this.bindLocalPreview();
-      return;
-    }
-
-    await this.startCamera();
-  }
-
   copyCallID() {
     const id = this.callIdentity$.actual;
     if (!id) return;
@@ -472,54 +601,25 @@ export class SecretAuthPageComponent extends AbstractComponent {
         });
   }
 
-  private async startCamera() {
-    decallLog("media", "Requesting camera and microphone");
-    try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
-      decallLog("media", "Camera and microphone granted");
-    } catch (err) {
-      decallLog("media", "Camera unavailable, trying audio only", err, "warn");
-
-      try {
-        this.localStream = await navigator.mediaDevices.getUserMedia({
-          video: false,
-          audio: true,
-        });
-        decallLog("media", "Microphone granted (audio only)");
-      } catch (audioErr) {
-        decallLog("media", "Microphone denied or unavailable", audioErr, "error");
-        if (this.inCall$.actual) this.chatStatus$.update("media error");
-        throw audioErr;
-      }
-    }
-
-    this.bindLocalPreview();
-  }
-
   toggleAudio() {
     void this.toggleAudioAsync();
   }
 
   private async toggleAudioAsync() {
-    await this.ensureLocalMedia();
-    if (!this.localStream) return;
-
-    let audioTrack = this.localStream.getAudioTracks()[0];
+    const audioTrack = this.localStream?.getAudioTracks()[0];
     if (!audioTrack) {
       if (this.isAudioEnabled$.actual) return;
-      audioTrack = await this.ensureMediaTrack("audio") ?? undefined;
-      if (!audioTrack) return;
+      const track = await this.ensureMediaTrack("audio", true);
+      if (!track) return;
       this.isAudioEnabled$.update(true);
       this.syncMediaCommand("AUDIO", true);
       return;
     }
 
-    audioTrack.enabled = !audioTrack.enabled;
-    this.isAudioEnabled$.update(audioTrack.enabled);
-    this.syncMediaCommand("AUDIO", audioTrack.enabled);
+    const next = !audioTrack.enabled;
+    audioTrack.enabled = next;
+    this.isAudioEnabled$.update(next);
+    this.syncMediaCommand("AUDIO", next);
   }
 
   toggleVideo() {
@@ -527,22 +627,24 @@ export class SecretAuthPageComponent extends AbstractComponent {
   }
 
   private async toggleVideoAsync() {
-    await this.ensureLocalMedia();
-    if (!this.localStream) return;
+    if (!this.videoModalOpen$.actual) {
+      this.openVideoModal();
+    }
 
-    let videoTrack = this.localStream.getVideoTracks()[0];
+    const videoTrack = this.localStream?.getVideoTracks()[0];
     if (!videoTrack) {
       if (this.isVideoEnabled$.actual) return;
-      videoTrack = await this.ensureMediaTrack("video") ?? undefined;
-      if (!videoTrack) return;
+      const track = await this.ensureMediaTrack("video", true);
+      if (!track) return;
       this.isVideoEnabled$.update(true);
       this.syncMediaCommand("VIDEO", true);
       return;
     }
 
-    videoTrack.enabled = !videoTrack.enabled;
-    this.isVideoEnabled$.update(videoTrack.enabled);
-    this.syncMediaCommand("VIDEO", videoTrack.enabled);
+    const next = !videoTrack.enabled;
+    videoTrack.enabled = next;
+    this.isVideoEnabled$.update(next);
+    this.syncMediaCommand("VIDEO", next);
   }
 
   private async startChat(roomId: string, role: "host" | "guest") {
@@ -559,13 +661,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
       userAgent: navigator.userAgent,
     });
 
-    try {
-      await this.ensureLocalMedia();
-    } catch {
-      this.inCall$.update(false);
-      return;
-    }
-
     const proof = this.secretAuthState$.actual?.proof;
     if (!proof) {
       this.inCall$.update(false);
@@ -573,6 +668,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
       this.chatStatus$.update("error");
       return;
     }
+
+    const selfCallId = this.callIdentity$.actual ?? "";
 
     this.chatSession = new ChatSession(
       (message) => {
@@ -583,6 +680,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
             const parts = message.text.split(":");
             if (parts[1] === "AUDIO") this.isRemoteAudioEnabled$.update(parts[2] === "ON");
             if (parts[1] === "VIDEO") this.isRemoteVideoEnabled$.update(parts[2] === "ON");
+            if (parts[1] === "TYPING") this.setPeerTyping(parts[2] === "ON");
           }
           return;
         }
@@ -593,6 +691,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
         (status) => {
         this.chatStatus$.update(status);
         this.chatConnected$.update(CHAT_CONNECTED_STATUSES.has(status));
+
+        if (status === "waiting for peer…") {
+          this.joinRequestOpen$.update(false);
+        }
 
         if (status === "chat ready" || status === "open" || status === "connected") {
           setTimeout(() => {
@@ -606,6 +708,11 @@ export class SecretAuthPageComponent extends AbstractComponent {
         this.connectionMode$.update(mode === "p2p" ? "P2P" : mode === "turn" ? "TURN" : "");
       },
 
+      (callId) => {
+        this.joinRequestCallId$.update(callId || "unknown");
+        this.joinRequestOpen$.update(true);
+      },
+
       this.localStream,
 
       (remoteStream) => {
@@ -613,6 +720,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
         if (remoteVideo) {
           remoteVideo.srcObject = remoteStream;
         }
+        this.isRemoteVideoEnabled$.update(remoteStream.getVideoTracks().some((t) => t.enabled));
+        this.isRemoteAudioEnabled$.update(remoteStream.getAudioTracks().some((t) => t.enabled));
       },
 
       () => {
@@ -628,6 +737,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
             : undefined,
         });
       },
+
+      selfCallId,
     );
 
     const action = role === "host"
@@ -727,7 +838,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
       requestAnimationFrame(() => {
         this.postAuthEntering$.update(true);
         this.startIdentityScramble(this.pendingIdentity);
-        void this.ensureLocalMedia().catch(() => {});
       });
     }, EXIT_FADE_MS);
   }

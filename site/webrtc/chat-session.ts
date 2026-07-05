@@ -16,6 +16,7 @@ export type ChatMessage = {
 type SignalMessage = {
   type: string;
   role?: string;
+  callId?: string;
   sdp?: string;
   candidate?: RTCIceCandidateInit;
   message?: string;
@@ -43,9 +44,11 @@ export class ChatSession {
     private onMessage: (msg: ChatMessage) => void,
     private onStatus: (status: string) => void,
     private onTransportMode: (mode: IceTransportMode | "") => void,
+    private onJoinRequest: (callId: string) => void,
     private localStream: MediaStream | null,
     private onRemoteStream: (stream: MediaStream) => void,
     private resolveIceServers: () => Promise<RTCIceServer[]>,
+    private selfCallId: string,
   ) {
     sessionCounter += 1;
     this.sessionId = `s${sessionCounter}`;
@@ -282,8 +285,18 @@ export class ChatSession {
       });
     });
 
-    this.sendSignal({ type: "join", roomId, role });
-    this.log("signal", "→ join", { roomId, role });
+    this.sendSignal({ type: "join", roomId, role, callId: this.selfCallId });
+    this.log("signal", "→ join", { roomId, role, callId: this.selfCallId });
+  }
+
+  acceptJoinRequest() {
+    this.sendSignal({ type: "accept-guest" });
+    this.log("signal", "→ accept-guest");
+  }
+
+  rejectJoinRequest() {
+    this.sendSignal({ type: "reject-guest" });
+    this.log("signal", "→ reject-guest");
   }
 
   private sanitizeSignalForLog(message: SignalMessage): Record<string, unknown> {
@@ -330,6 +343,20 @@ export class ChatSession {
         break;
       case "waiting":
         this.onStatus("waiting for peer…");
+        break;
+      case "waiting-approval":
+        this.onStatus("waiting for approval…");
+        break;
+      case "join-request":
+        if (message.callId) {
+          this.onJoinRequest(message.callId);
+        }
+        this.onStatus("incoming request…");
+        break;
+      case "join-rejected":
+        this.onStatus("call declined");
+        this.onMessage({ from: "system", text: message.message ?? "Host declined your request" });
+        this.close();
         break;
       case "peer-joined":
         this.onStatus("negotiating…");
