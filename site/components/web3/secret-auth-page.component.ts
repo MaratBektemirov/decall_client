@@ -57,7 +57,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
             <div class="${styles.identityEmojis}">{{ root.callIdentity$::rx }}</div>
           </div>
           <p class="${styles.identityHint}">
-            Same key always gives the same emojis on every device.
+            Same key always gives the same ID on every device.
           </p>
         </div>
 
