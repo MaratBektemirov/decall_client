@@ -72,8 +72,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
     },
     chatSpinner: {
       config: SpinnerConfig({
-        color: "#111827",
-        size: "10px",
+        color: "#6b7280",
+        size: "8px",
       }),
     },
   });
@@ -137,14 +137,23 @@ export class SecretAuthPageComponent extends AbstractComponent {
                     </div>
                   </div>
                 </div>
-                <div class="${styles.chatStatusBar}">
-                  <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
-                  <span class="${styles.chatTransport} ${styles.chatTransportP2p}"
-                    attached="{{ root.connectionMode$::rx === 'P2P' }}"
-                    title="Direct peer connection (host or STUN)">P2P</span>
-                  <span class="${styles.chatTransport} ${styles.chatTransportTurn}"
-                    attached="{{ root.connectionMode$::rx === 'TURN' }}"
-                    title="Media relayed via TURN server">TURN</span>
+                <div class="${styles.chatStatusColumn}">
+                  <div class="${styles.chatStatusBar}">
+                    <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
+                    <span class="${styles.chatTransport} ${styles.chatTransportP2p}"
+                      attached="{{ root.connectionMode$::rx === 'P2P' }}"
+                      title="Direct peer connection (host or STUN)">P2P</span>
+                    <span class="${styles.chatTransport} ${styles.chatTransportTurn}"
+                      attached="{{ root.connectionMode$::rx === 'TURN' }}"
+                      title="Media relayed via TURN server">TURN</span>
+                  </div>
+                  <div class="${styles.chatStatusSpinner}"
+                    attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}"
+                    is="spinner"
+                    component-id="chatSpinner"
+                    bucket-id="${this.innerBucket.id}">
+                    <div class="${styles.chatStatusSpinnerSlot}"></div>
+                  </div>
                 </div>
               </div>
 
@@ -214,14 +223,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
               </div>
 
               <div class="${styles.chatMessenger}">
-                <div class="${styles.chatSpinnerWrap}"
-                  attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}"
-                  is="spinner"
-                  component-id="chatSpinner"
-                  bucket-id="${this.innerBucket.id}">
-                  <div class="${styles.chatSpinnerSlot}"></div>
-                </div>
-
                 <div class="${styles.messages}" attached="{{ root.chatConnected$::rx }}">
                   <div repeat="{{ root.chatMessages }}" class="${styles.messageRow}">
                     <div class="${styles.message} ${styles.messageMe}" attached="{{ this::rx.from === 'me' }}">{{ this::rx.text }}</div>
@@ -516,7 +517,19 @@ export class SecretAuthPageComponent extends AbstractComponent {
         }
       },
 
-      () => fetchTurnIceServers(proof),
+      () => {
+        const authState = this.secretAuthState$.actual;
+        const passkey = authState?.passkey;
+        return fetchTurnIceServers({
+          proof,
+          webauthn: passkey?.credentialPublicKey
+            ? {
+                credentialPublicKey: passkey.credentialPublicKey,
+                expectedOrigin: window.location.origin,
+              }
+            : undefined,
+        });
+      },
     );
 
     const action = role === "host"

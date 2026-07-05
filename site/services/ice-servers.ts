@@ -3,7 +3,15 @@ import { decallLog } from "site/utils/decall-log";
 
 const apiBase = (import.meta.env.VITE_API_BASE ?? "/api").replace(/\/$/, "");
 
-export async function fetchTurnIceServers(proof: SecretAuthProof): Promise<RTCIceServer[]> {
+export type TurnCredentialsContext = {
+  proof: SecretAuthProof;
+  webauthn?: {
+    credentialPublicKey: string;
+    expectedOrigin?: string;
+  };
+};
+
+export async function fetchTurnIceServers(ctx: TurnCredentialsContext): Promise<RTCIceServer[]> {
   const url = `${apiBase}/turn-credentials`;
   decallLog("api", "POST turn-credentials", { url });
 
@@ -13,7 +21,10 @@ export async function fetchTurnIceServers(proof: SecretAuthProof): Promise<RTCIc
       Accept: "application/json",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ proof }),
+    body: JSON.stringify({
+      proof: ctx.proof,
+      webauthn: ctx.webauthn,
+    }),
   });
 
   if (!res.ok) {
