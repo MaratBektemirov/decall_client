@@ -39,6 +39,8 @@ export class ChatSession {
   private transportCheckTimer = 0;
   private transportCheckAttempts = 0;
   private closed = false;
+  private connectionGen = 0;
+  private iceServers: RTCIceServer[] = FALLBACK_ICE_SERVERS;
 
   constructor(
     private onMessage: (msg: ChatMessage) => void,
@@ -47,6 +49,8 @@ export class ChatSession {
     private onJoinRequest: (callId: string) => void,
     private localStream: MediaStream | null,
     private onRemoteStream: (stream: MediaStream) => void,
+    private onRemoteCleared: () => void,
+    private onCallEnded: () => void,
     private resolveIceServers: () => Promise<RTCIceServer[]>,
     private selfCallId: string,
   ) {
@@ -90,20 +94,22 @@ export class ChatSession {
     const hadResources = Boolean(this.ws || this.pc || this.dc);
     if (this.closed && !hadResources) return;
 
+    this.connectionGen += 1;
     this.closed = true;
     if (hadResources) this.log("session", "Closing session");
-    this.dc?.close();
-    this.pc?.close();
+    this.teardownPeerConnection();
     this.ws?.close();
-    this.dc = null;
-    this.pc = null;
     this.ws = null;
     this.roomId = "";
-    this.pendingIce = [];
-    this.iceCandidateTypes.clear();
-    this.stopTransportMonitoring();
-    this.transportMode = null;
-    this.onTransportMode("");
+    this.role = "guest";
+  }
+
+  private endCall(reason: string) {
+    if (this.closed) return;
+    this.log("session", `Call ended (${reason})`);
+    this.onStatus("idle");
+    this.close();
+    this.onCallEnded();
   }
 
   private log(
@@ -118,6 +124,7 @@ export class ChatSession {
   private async connect(roomId: string, role: "host" | "guest") {
     this.close();
     this.closed = false;
+    const gen = ++this.connectionGen;
 
     this.roomId = roomId;
     this.role = role;
@@ -130,18 +137,27 @@ export class ChatSession {
     this.ws = ws;
 
     ws.addEventListener("open", () => {
+      if (gen !== this.connectionGen) return;
       this.log("signal", "WebSocket open");
     });
 
     ws.addEventListener("error", () => {
+      if (gen !== this.connectionGen) return;
       this.log("signal", "WebSocket error", hintForSignalFailure(), "error");
     });
 
     ws.addEventListener("close", (event) => {
+      if (gen !== this.connectionGen) return;
       const hint = describeWebSocketClose(event.code, event.reason);
       this.log("signal", "WebSocket closed", { code: event.code, reason: event.reason, hint }, "warn");
-      this.onStatus("disconnected");
-      this.onMessage({ from: "system", text: `Signaling closed: ${hint}` });
+      if (!this.closed) {
+        this.closed = true;
+        this.teardownPeerConnection();
+        this.ws = null;
+        this.roomId = "";
+        this.onStatus("idle");
+        this.onCallEnded();
+      }
     });
 
     try {
@@ -152,21 +168,85 @@ export class ChatSession {
         }, { once: true });
       });
     } catch (err) {
+      if (gen !== this.connectionGen) return;
       this.log("signal", "WebSocket connect failed", err, "error");
       throw err;
     }
 
-    let iceServers: RTCIceServer[];
+    if (gen !== this.connectionGen) return;
+
     try {
-      iceServers = await this.resolveIceServers();
+      this.iceServers = await this.resolveIceServers();
     } catch (err) {
       this.log("api", "Failed to load TURN credentials, using STUN fallback", err, "warn");
-      iceServers = FALLBACK_ICE_SERVERS;
+      this.iceServers = FALLBACK_ICE_SERVERS;
     }
 
-    this.pc = new RTCPeerConnection({ iceServers });
+    if (gen !== this.connectionGen) return;
+
+    this.setupPeerConnection(gen);
+
+    ws.addEventListener("message", (event) => {
+      if (gen !== this.connectionGen) return;
+      let payload: SignalMessage;
+      try {
+        payload = JSON.parse(String(event.data)) as SignalMessage;
+      } catch (err) {
+        this.log("signal", "Invalid signal JSON", err, "error");
+        return;
+      }
+
+      this.log("signal", `← ${payload.type}`, this.sanitizeSignalForLog(payload));
+      void this.handleSignal(payload).catch((err: unknown) => {
+        if (gen !== this.connectionGen) return;
+        const text = err instanceof Error ? err.message : "signaling error";
+        this.log("signal", "Signal handler error", err, "error");
+        this.onStatus("error");
+        this.onMessage({ from: "system", text });
+      });
+    });
+
+    this.sendSignal({ type: "join", roomId, role, callId: this.selfCallId });
+    this.log("signal", "→ join", { roomId, role, callId: this.selfCallId });
+  }
+
+  private teardownPeerConnection() {
+    if (this.pc) {
+      this.pc.ontrack = null;
+      this.pc.onicecandidate = null;
+      this.pc.onicegatheringstatechange = null;
+      this.pc.oniceconnectionstatechange = null;
+      this.pc.onsignalingstatechange = null;
+      this.pc.onconnectionstatechange = null;
+      this.pc.ondatachannel = null;
+      this.pc.close();
+      this.pc = null;
+    }
+
+    if (this.dc) {
+      this.dc.onopen = null;
+      this.dc.onclose = null;
+      this.dc.onerror = null;
+      this.dc.onmessage = null;
+      this.dc.close();
+      this.dc = null;
+    }
+
+    this.pendingIce = [];
+    this.iceCandidateTypes.clear();
+    this.stopTransportMonitoring();
+    this.transportMode = null;
+    this.onTransportMode("");
+    this.onRemoteCleared();
+  }
+
+  private setupPeerConnection(gen: number) {
+    this.teardownPeerConnection();
+    if (this.closed || gen !== this.connectionGen) return;
+
+    this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
     this.log("webrtc", "RTCPeerConnection created", {
-      iceServers: iceServers.map((server) => ({
+      iceServers: this.iceServers.map((server) => ({
         urls: server.urls,
         hasCredential: Boolean(server.username && server.credential),
       })),
@@ -183,6 +263,7 @@ export class ChatSession {
     }
 
     this.pc.ontrack = (event) => {
+      if (gen !== this.connectionGen) return;
       const stream = event.streams?.[0];
       this.log("webrtc", "Remote track received", {
         kind: event.track.kind,
@@ -193,6 +274,7 @@ export class ChatSession {
     };
 
     this.pc.onicecandidate = (event) => {
+      if (gen !== this.connectionGen) return;
       if (!event.candidate) {
         this.log("ice", "ICE gathering complete", {
           types: [...this.iceCandidateTypes],
@@ -211,10 +293,12 @@ export class ChatSession {
     };
 
     this.pc.onicegatheringstatechange = () => {
+      if (gen !== this.connectionGen) return;
       this.log("ice", `ICE gathering: ${this.pc?.iceGatheringState ?? "unknown"}`);
     };
 
     this.pc.oniceconnectionstatechange = () => {
+      if (gen !== this.connectionGen) return;
       const state = this.pc?.iceConnectionState ?? "unknown";
       this.log("ice", `ICE connection: ${state}`);
 
@@ -231,10 +315,12 @@ export class ChatSession {
     };
 
     this.pc.onsignalingstatechange = () => {
+      if (gen !== this.connectionGen) return;
       this.log("webrtc", `Signaling state: ${this.pc?.signalingState ?? "unknown"}`);
     };
 
     this.pc.onconnectionstatechange = () => {
+      if (gen !== this.connectionGen) return;
       const state = this.pc?.connectionState ?? "closed";
       this.log("webrtc", `Connection state: ${state}`);
 
@@ -246,8 +332,8 @@ export class ChatSession {
 
       if (state === "failed") {
         this.log("webrtc", "Peer connection failed", hintForIceFailure(), "error");
-        this.onStatus("error");
         this.onMessage({ from: "system", text: hintForIceFailure() });
+        this.endCall("connection-failed");
         return;
       }
 
@@ -256,37 +342,32 @@ export class ChatSession {
       }
     };
 
-    if (role === "host") {
+    if (this.role === "host") {
       const channel = this.pc.createDataChannel("chat");
       this.log("webrtc", "Data channel created (host)");
-      this.wireDataChannel(channel);
+      this.wireDataChannel(channel, gen);
     } else {
       this.pc.ondatachannel = (event) => {
+        if (gen !== this.connectionGen) return;
         this.log("webrtc", "Data channel received (guest)");
-        this.wireDataChannel(event.channel);
+        this.wireDataChannel(event.channel, gen);
       };
     }
+  }
 
-    ws.addEventListener("message", (event) => {
-      let payload: SignalMessage;
-      try {
-        payload = JSON.parse(String(event.data)) as SignalMessage;
-      } catch (err) {
-        this.log("signal", "Invalid signal JSON", err, "error");
-        return;
-      }
+  private async resetForNewPeer() {
+    if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-      this.log("signal", `← ${payload.type}`, this.sanitizeSignalForLog(payload));
-      void this.handleSignal(payload).catch((err: unknown) => {
-        const text = err instanceof Error ? err.message : "signaling error";
-        this.log("signal", "Signal handler error", err, "error");
-        this.onStatus("error");
-        this.onMessage({ from: "system", text });
-      });
-    });
+    this.log("session", "Resetting peer connection for new peer");
+    this.teardownPeerConnection();
 
-    this.sendSignal({ type: "join", roomId, role, callId: this.selfCallId });
-    this.log("signal", "→ join", { roomId, role, callId: this.selfCallId });
+    try {
+      this.iceServers = await this.resolveIceServers();
+    } catch (err) {
+      this.log("api", "Failed to refresh TURN credentials, reusing previous ICE servers", err, "warn");
+    }
+
+    this.setupPeerConnection(this.connectionGen);
   }
 
   acceptJoinRequest() {
@@ -312,29 +393,52 @@ export class ChatSession {
     return { type: message.type, role: message.role, message: message.message };
   }
 
-  private wireDataChannel(channel: RTCDataChannel) {
+  private wireDataChannel(channel: RTCDataChannel, gen: number) {
     this.dc = channel;
 
     channel.onopen = () => {
+      if (gen !== this.connectionGen) return;
       this.log("webrtc", "Data channel open");
       this.onStatus("chat ready");
-      this.onMessage({ from: "system", text: "Peer-to-peer chat is open" });
     };
 
     channel.onclose = () => {
+      if (gen !== this.connectionGen) return;
       this.log("webrtc", "Data channel closed", null, "warn");
     };
 
     channel.onerror = () => {
+      if (gen !== this.connectionGen) return;
       this.log("webrtc", "Data channel error", null, "error");
     };
 
     channel.onmessage = (event) => {
+      if (gen !== this.connectionGen) return;
       this.onMessage({ from: "peer", text: String(event.data) });
     };
   }
 
   private async handleSignal(message: SignalMessage) {
+    switch (message.type) {
+      case "peer-left":
+        this.onMessage({
+          from: "system",
+          text: message.message ?? "Other participant disconnected",
+        });
+        this.endCall("peer-left");
+        return;
+      case "join-rejected":
+        this.onStatus("call declined");
+        this.onMessage({ from: "system", text: message.message ?? "Host declined your request" });
+        this.endCall("join-rejected");
+        return;
+      case "error":
+        this.onStatus("error");
+        this.log("signal", "Server error", message.message, "error");
+        this.onMessage({ from: "system", text: message.message ?? "error" });
+        return;
+    }
+
     if (!this.pc) return;
 
     switch (message.type) {
@@ -353,13 +457,11 @@ export class ChatSession {
         }
         this.onStatus("incoming request…");
         break;
-      case "join-rejected":
-        this.onStatus("call declined");
-        this.onMessage({ from: "system", text: message.message ?? "Host declined your request" });
-        this.close();
-        break;
       case "peer-joined":
         this.onStatus("negotiating…");
+        if (!this.pc) {
+          await this.resetForNewPeer();
+        }
         if (this.role === "host") {
           await this.createOffer();
         }
@@ -381,15 +483,6 @@ export class ChatSession {
       case "ice":
         if (!message.candidate) return;
         await this.addIceCandidate(message.candidate);
-        break;
-      case "peer-left":
-        this.onStatus("peer left");
-        this.onMessage({ from: "system", text: "Peer left" });
-        break;
-      case "error":
-        this.onStatus("error");
-        this.log("signal", "Server error", message.message, "error");
-        this.onMessage({ from: "system", text: message.message ?? "error" });
         break;
     }
   }

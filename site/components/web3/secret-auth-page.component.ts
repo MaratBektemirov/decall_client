@@ -227,7 +227,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 </div>
               </div>
 
-              <div class="${styles.videoModalBackdrop} {{ root.videoModalOpen$::rx ? styles.videoModalOpen : '' }}"
+              <div class="${styles.videoModalBackdrop}"
+                attached="{{ root.videoModalOpen$::rx }}"
                 onclick="{{ root.closeVideoModal(event) }}">
                 <div class="${styles.videoStage}" onclick="event.stopPropagation()">
                   <video id="remoteVideo" class="${styles.remoteVideo}" autoplay playsinline></video>
@@ -476,23 +477,38 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.peerTyping$.update(false);
   }
 
-  disconnectChat() {
-    decallLog("session", "User disconnected call");
+  private clearCallUi() {
     this.closeVideoModal();
     this.joinRequestOpen$.update(false);
+    this.joinRequestCallId$.update("");
     this.clearTypingTimers();
-    this.chatSession?.close();
-    this.chatSession = null;
-    this.chatStatus$.update("idle");
-    this.connectionMode$.update("");
     this.chatConnected$.update(false);
-    this.inCall$.update(false);
+    this.connectionMode$.update("");
     this.isRemoteAudioEnabled$.update(false);
     this.isRemoteVideoEnabled$.update(false);
+    this.chatDraft$.update("");
 
     const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
     if (remoteVideo) remoteVideo.srcObject = null;
+
+    const localVideo = document.getElementById("localVideo") as HTMLVideoElement | null;
+    if (localVideo) localVideo.srcObject = null;
+  }
+
+  private endCall() {
+    if (!this.inCall$.actual && !this.chatSession) return;
+
+    this.clearCallUi();
     this.stopLocalMedia();
+    this.chatSession?.close();
+    this.chatSession = null;
+    this.chatStatus$.update("idle");
+    this.inCall$.update(false);
+  }
+
+  disconnectChat() {
+    decallLog("session", "User disconnected call");
+    this.endCall();
   }
 
   openVideoModal() {
@@ -696,6 +712,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
           this.joinRequestOpen$.update(false);
         }
 
+        if (status === "idle") {
+          this.endCall();
+        }
+
         if (status === "chat ready" || status === "open" || status === "connected") {
           setTimeout(() => {
             this.chatSession?.send(`CMD:AUDIO:${this.isAudioEnabled$.actual ? "ON" : "OFF"}`);
@@ -722,6 +742,20 @@ export class SecretAuthPageComponent extends AbstractComponent {
         }
         this.isRemoteVideoEnabled$.update(remoteStream.getVideoTracks().some((t) => t.enabled));
         this.isRemoteAudioEnabled$.update(remoteStream.getAudioTracks().some((t) => t.enabled));
+      },
+
+      () => {
+        const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
+        if (remoteVideo?.srcObject instanceof MediaStream) {
+          remoteVideo.srcObject.getTracks().forEach((track) => track.stop());
+          remoteVideo.srcObject = null;
+        }
+        this.isRemoteVideoEnabled$.update(false);
+        this.isRemoteAudioEnabled$.update(false);
+      },
+
+      () => {
+        this.endCall();
       },
 
       () => {
