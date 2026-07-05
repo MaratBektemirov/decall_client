@@ -137,23 +137,23 @@ export class SecretAuthPageComponent extends AbstractComponent {
                     </div>
                   </div>
                 </div>
-                <div class="${styles.chatStatusColumn}">
-                  <div class="${styles.chatStatusBar}">
+                <div class="${styles.chatStatusBar}">
+                  <div class="${styles.chatStatusGroup}">
                     <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
-                    <span class="${styles.chatTransport} ${styles.chatTransportP2p}"
-                      attached="{{ root.connectionMode$::rx === 'P2P' }}"
-                      title="Direct peer connection (host or STUN)">P2P</span>
-                    <span class="${styles.chatTransport} ${styles.chatTransportTurn}"
-                      attached="{{ root.connectionMode$::rx === 'TURN' }}"
-                      title="Media relayed via TURN server">TURN</span>
+                    <div class="${styles.chatStatusSpinner}"
+                      attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}"
+                      is="spinner"
+                      component-id="chatSpinner"
+                      bucket-id="${this.innerBucket.id}">
+                      <div class="${styles.chatStatusSpinnerSlot}"></div>
+                    </div>
                   </div>
-                  <div class="${styles.chatStatusSpinner}"
-                    attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}"
-                    is="spinner"
-                    component-id="chatSpinner"
-                    bucket-id="${this.innerBucket.id}">
-                    <div class="${styles.chatStatusSpinnerSlot}"></div>
-                  </div>
+                  <span class="${styles.chatTransport} ${styles.chatTransportP2p}"
+                    attached="{{ root.connectionMode$::rx === 'P2P' }}"
+                    title="Direct peer connection (host or STUN)">P2P</span>
+                  <span class="${styles.chatTransport} ${styles.chatTransportTurn}"
+                    attached="{{ root.connectionMode$::rx === 'TURN' }}"
+                    title="Media relayed via TURN server">TURN</span>
                 </div>
               </div>
 
