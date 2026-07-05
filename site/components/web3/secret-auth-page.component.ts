@@ -206,7 +206,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
               <div class="${styles.mediaControls}">
                 <button type="button"
                   class="${styles.mediaButton}"
-                  disabled="{{ !root.inCall$::rx }}"
                   aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
                   onclick="{{ root.toggleVideo() }}">
                   <video-icon class="${styles.mediaIcon}" attached="{{ root.isVideoEnabled$::rx }}"></video-icon>
@@ -214,7 +213,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 </button>
                 <button type="button"
                   class="${styles.mediaButton}"
-                  disabled="{{ !root.inCall$::rx }}"
                   aria-label="{{ root.isAudioEnabled$::rx ? 'Turn microphone off' : 'Turn microphone on' }}"
                   onclick="{{ root.toggleAudio() }}">
                   <microphone-icon class="${styles.mediaIcon}" attached="{{ root.isAudioEnabled$::rx }}"></microphone-icon>
@@ -362,11 +360,81 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.chatConnected$.update(false);
     this.inCall$.update(false);
 
-    // turn off camera and audio
+    const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
+    if (remoteVideo) remoteVideo.srcObject = null;
+  }
+
+  private stopLocalMedia() {
     if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream.getTracks().forEach((track) => track.stop());
       this.localStream = null;
     }
+
+    const localVideo = document.getElementById("localVideo") as HTMLVideoElement | null;
+    if (localVideo) localVideo.srcObject = null;
+
+    this.isAudioEnabled$.update(false);
+    this.isVideoEnabled$.update(false);
+  }
+
+  private bindLocalPreview() {
+    const localVideo = document.getElementById("localVideo") as HTMLVideoElement | null;
+    if (localVideo) {
+      localVideo.srcObject = this.localStream;
+    }
+
+    const audioTrack = this.localStream?.getAudioTracks()[0];
+    const videoTrack = this.localStream?.getVideoTracks()[0];
+    this.isAudioEnabled$.update(Boolean(audioTrack?.enabled));
+    this.isVideoEnabled$.update(Boolean(videoTrack?.enabled));
+  }
+
+  private syncMediaCommand(kind: "AUDIO" | "VIDEO", enabled: boolean) {
+    if (!this.inCall$.actual || !this.chatSession) return;
+    this.chatSession.send(`CMD:${kind}:${enabled ? "ON" : "OFF"}`);
+  }
+
+  private async ensureMediaTrack(kind: "audio" | "video"): Promise<MediaStreamTrack | null> {
+    const existing = kind === "audio"
+      ? this.localStream?.getAudioTracks()[0]
+      : this.localStream?.getVideoTracks()[0];
+    if (existing) return existing;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: kind === "audio",
+        video: kind === "video",
+      });
+      const track = kind === "audio" ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
+      if (!track) return null;
+
+      if (!this.localStream) {
+        this.localStream = new MediaStream();
+      }
+
+      this.localStream.addTrack(track);
+      stream.getTracks().filter((t) => t !== track).forEach((t) => t.stop());
+
+      this.bindLocalPreview();
+
+      if (this.chatSession && this.inCall$.actual) {
+        this.chatSession.addLocalTrack(track, this.localStream);
+      }
+
+      return track;
+    } catch (err) {
+      decallLog("media", `Failed to enable ${kind}`, err, "error");
+      return null;
+    }
+  }
+
+  private async ensureLocalMedia() {
+    if (this.localStream) {
+      this.bindLocalPreview();
+      return;
+    }
+
+    await this.startCamera();
   }
 
   copyCallID() {
@@ -405,46 +473,58 @@ export class SecretAuthPageComponent extends AbstractComponent {
         decallLog("media", "Microphone granted (audio only)");
       } catch (audioErr) {
         decallLog("media", "Microphone denied or unavailable", audioErr, "error");
-        this.chatStatus$.update("media error");
+        if (this.inCall$.actual) this.chatStatus$.update("media error");
         throw audioErr;
       }
     }
-      const localVideo = document.getElementById("localVideo") as HTMLVideoElement;
-      if (localVideo) {
-        localVideo.srcObject = this.localStream;
 
-        const audioTrack = this.localStream.getAudioTracks()[0];
-        const videoTrack = this.localStream.getVideoTracks()[0];
-
-        this.isAudioEnabled$.update(audioTrack ? audioTrack.enabled : false);
-        this.isVideoEnabled$.update(videoTrack ? videoTrack.enabled : false);
-      }
+    this.bindLocalPreview();
   }
 
   toggleAudio() {
+    void this.toggleAudioAsync();
+  }
+
+  private async toggleAudioAsync() {
+    await this.ensureLocalMedia();
     if (!this.localStream) return;
 
-    const audioTrack = this.localStream.getTracks()[0];
-    if (audioTrack) {
-      audioTrack.enabled = !audioTrack.enabled;
-
-      this.isAudioEnabled$.update(audioTrack.enabled);
-
-      this.chatSession?.send(`CMD:AUDIO:${audioTrack.enabled ? "ON" : "OFF"}`);
+    let audioTrack = this.localStream.getAudioTracks()[0];
+    if (!audioTrack) {
+      if (this.isAudioEnabled$.actual) return;
+      audioTrack = await this.ensureMediaTrack("audio") ?? undefined;
+      if (!audioTrack) return;
+      this.isAudioEnabled$.update(true);
+      this.syncMediaCommand("AUDIO", true);
+      return;
     }
+
+    audioTrack.enabled = !audioTrack.enabled;
+    this.isAudioEnabled$.update(audioTrack.enabled);
+    this.syncMediaCommand("AUDIO", audioTrack.enabled);
   }
 
   toggleVideo() {
+    void this.toggleVideoAsync();
+  }
+
+  private async toggleVideoAsync() {
+    await this.ensureLocalMedia();
     if (!this.localStream) return;
 
-    const videoTrack = this.localStream.getVideoTracks()[0];
-
-    if (videoTrack) {
-      videoTrack.enabled = !videoTrack.enabled;
-      this.isVideoEnabled$.update(videoTrack.enabled);
-
-      this.chatSession?.send(`CMD:VIDEO:${videoTrack.enabled ? "ON" : "OFF"}`);
+    let videoTrack = this.localStream.getVideoTracks()[0];
+    if (!videoTrack) {
+      if (this.isVideoEnabled$.actual) return;
+      videoTrack = await this.ensureMediaTrack("video") ?? undefined;
+      if (!videoTrack) return;
+      this.isVideoEnabled$.update(true);
+      this.syncMediaCommand("VIDEO", true);
+      return;
     }
+
+    videoTrack.enabled = !videoTrack.enabled;
+    this.isVideoEnabled$.update(videoTrack.enabled);
+    this.syncMediaCommand("VIDEO", videoTrack.enabled);
   }
 
   private async startChat(roomId: string, role: "host" | "guest") {
@@ -462,8 +542,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
     });
 
     try {
-      await this.startCamera();
-    } catch (err) {
+      await this.ensureLocalMedia();
+    } catch {
       this.inCall$.update(false);
       return;
     }
@@ -629,6 +709,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
       requestAnimationFrame(() => {
         this.postAuthEntering$.update(true);
         this.startIdentityScramble(this.pendingIdentity);
+        void this.ensureLocalMedia().catch(() => {});
       });
     }, EXIT_FADE_MS);
   }
@@ -648,6 +729,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.pendingIdentity = "";
     this.stopIdentityScramble?.();
     this.stopIdentityScramble = undefined;
+    this.stopLocalMedia();
 
     this.showAuthPanel$.update(true);
     this.showHeader$.update(true);

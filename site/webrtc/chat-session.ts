@@ -75,6 +75,14 @@ export class ChatSession {
     this.onMessage({ from: "me", text: value });
   }
 
+  addLocalTrack(track: MediaStreamTrack, stream: MediaStream) {
+    if (!this.pc || this.closed) return;
+
+    this.pc.addTrack(track, stream);
+    this.log("media", `Local track added during call (${track.kind})`);
+    void this.renegotiate();
+  }
+
   close() {
     const hadResources = Boolean(this.ws || this.pc || this.dc);
     if (this.closed && !hadResources) return;
@@ -366,6 +374,15 @@ export class ChatSession {
     await this.pc.setLocalDescription(offer);
     this.sendSignal({ type: "offer", sdp: offer.sdp ?? "" });
     this.log("signal", "→ offer", { sdpBytes: offer.sdp?.length ?? 0 });
+  }
+
+  private async renegotiate() {
+    if (!this.pc || this.closed || this.pc.signalingState !== "stable") return;
+
+    const offer = await this.pc.createOffer();
+    await this.pc.setLocalDescription(offer);
+    this.sendSignal({ type: "offer", sdp: offer.sdp ?? "" });
+    this.log("signal", "→ offer (renegotiate)", { sdpBytes: offer.sdp?.length ?? 0 });
   }
 
   private async addIceCandidate(candidate: RTCIceCandidateInit) {
