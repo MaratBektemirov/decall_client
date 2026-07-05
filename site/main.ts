@@ -1,5 +1,4 @@
 import "cruzo/ui-components/vars.css";
-import "cruzo/ui-components/margin.css";
 import "cruzo/ui-components/button.css";
 import "cruzo/ui-components/button-group.css";
 import "cruzo/ui-components/input.css";
@@ -7,6 +6,7 @@ import "cruzo/ui-components/textarea.css";
 import "cruzo/ui-components/modal.css";
 import "cruzo/ui-components/toast.css";
 import "cruzo/ui-components/spinner.css";
+import "cruzo/ui-components/margin.css";
 import "./css/common.css";
 
 import { Template, componentsRegistryService, routerService } from "cruzo";

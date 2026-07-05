@@ -2,21 +2,33 @@ import styles from "./secret-auth-page.module.css";
 
 import { AbstractComponent, componentsRegistryService, Rx, RxBucket } from "cruzo";
 import { UI_KIT } from "cruzo/ui-components/const";
+import { SpinnerComponent, SpinnerConfig, SpinnerValue } from "cruzo/ui-components/spinner";
 import { SecretAuthComponent } from "cruzo-web3/components/secret-auth";
 import type { SecretAuthState } from "cruzo-web3";
 
 import { fetchAuthChallenge } from "site/services/auth-api";
 import { pubKeyToCallIdentity } from "site/utils/call-identity";
+import { runIdentityScramble } from "site/utils/identity-scramble";
 import { ChatSession, type ChatMessage } from "site/webrtc/chat-session";
 import "site/web3-setup";
+
+const EXIT_FADE_MS = 520;
+
+const CHAT_CONNECTED_STATUSES = new Set(["chat ready", "open", "connected"]);
 
 export class SecretAuthPageComponent extends AbstractComponent {
   static selector = "secret-auth-page-component";
 
-  dependencies = new Set([SecretAuthComponent.selector]);
+  dependencies = new Set([SecretAuthComponent.selector, SpinnerComponent.selector]);
 
   callIdentity$ = this.newRx("");
+  displayIdentity$ = this.newRx("");
   hasCallIdentity$ = this.newRx(false);
+  showAuthPanel$ = this.newRx(true);
+  showHeader$ = this.newRx(true);
+  showPostAuth$ = this.newRx(false);
+  authPanelExiting$ = this.newRx(false);
+  postAuthEntering$ = this.newRx(false);
   copyLabel$ = this.newRx("Copy ID");
   private localStream: MediaStream | null = null;
   isAudioEnabled$ = this.newRx(false);
@@ -28,7 +40,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
   challengeError$ = this.newRx("");
 
   joinCallId$ = this.newRx("");
+  callModalOpen$ = this.newRx(false);
   chatStatus$ = this.newRx("idle");
+  chatConnected$ = this.newRx(false);
+  inCall$ = this.newRx(false);
   chatMessages: Rx<ChatMessage>[] = [];
   chatDraft$ = this.newRx("");
 
@@ -39,6 +54,12 @@ export class SecretAuthPageComponent extends AbstractComponent {
         devMode: import.meta.env.DEV,
       },
     },
+    chatSpinner: {
+      config: SpinnerConfig({
+        color: "#111827",
+        size: "10px",
+      }),
+    },
   });
 
   secretAuthState$ = this.newRxStateFromBucket(this.innerBucket, "secretAuth");
@@ -46,36 +67,21 @@ export class SecretAuthPageComponent extends AbstractComponent {
   private identityGeneration = 0;
   private challengeGeneration = 0;
   private chatSession: ChatSession | null = null;
+  private authTransitionStarted = false;
+  private pendingIdentity = "";
+  private stopIdentityScramble?: () => void;
 
   getHTML() {
     const k = UI_KIT;
 
     return `<div class="${styles.page}">
-        <header class="${styles.header}">
+        <header class="${styles.header} {{ root.authPanelExiting$::rx ? '${styles.headerExiting}' : '' }}"
+          attached="{{ root.showHeader$::rx }}">
           <img class="${styles.logo}" src="/logo.svg" alt="Decall">
         </header>
 
-        <div class="${styles.identityCard}" attached="{{ root.hasCallIdentity$::rx }}">
-          <div class="${styles.identityHead}">
-            <h3 class="${styles.identityTitle}">Your ID</h3>
-          </div>
-          <div class="${styles.identityField}">
-            <span class="${styles.identityLabel}">Share this to receive a chat</span>
-            <div class="${styles.identityEmojis}">{{ root.callIdentity$::rx }}</div>
-            <div style="margin-top: 12px; display: flex; justify-content: center;">
-                <button type="button"
-                 class="${k}_button ${k}_button-s ${k}_button-secondary"
-                 onclick="{{ root.copyCallID() }}">
-                 {{ root.copyLabel$::rx }}   
-                </button>
-                </div>
-          </div>
-          <p class="${styles.identityHint}">
-            Same key always gives the same ID on every device.
-          </p>
-        </div>
-
-        <div class="${styles.panel}" attached="{{ !root.hasCallIdentity$::rx }}">
+        <div class="${styles.panel} {{ root.authPanelExiting$::rx ? '${styles.panelExiting}' : '' }}"
+          attached="{{ root.showAuthPanel$::rx }}">
           <p class="${styles.challengeError}" attached="{{ root.challengeError$::rx }}">
             {{ root.challengeError$::rx }}
           </p>
@@ -95,99 +101,127 @@ export class SecretAuthPageComponent extends AbstractComponent {
           </secret-auth-component>
         </div>
 
-        <div class="${styles.chatCard}" attached="{{ root.hasCallIdentity$::rx }}">
-          <div class="${styles.identityHead}">
-            <h3 class="${styles.identityTitle}">P2P chat</h3>
-            <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
-          </div>
+        <div class="${styles.postAuth}" attached="{{ root.showPostAuth$::rx }}">
+          <div class="${styles.postAuthInner} {{ root.postAuthEntering$::rx ? '${styles.postAuthEnter}' : '${styles.postAuthHidden}' }}">
+            <div class="${styles.chatCard}">
+              <div class="${styles.identityHead}">
+                <div class="${styles.chatHeadBrand}">
+                  <img class="${styles.chatLogo}" src="/logo.svg" alt="Decall">
+                  <div class="${styles.chatHeadText}">
+                    <span class="${styles.chatBrandTitle}">Decentralized calls</span>
+                    <div class="${styles.chatIdentityRow}">
+                      <span class="${styles.chatIdentityId}">{{ root.displayIdentity$::rx }}</span>
+                      <button type="button"
+                        class="${k}_button ${k}_button-s ${k}_button-secondary"
+                        onclick="{{ root.copyCallID() }}">
+                        {{ root.copyLabel$::rx }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div class="${styles.chatStatusBar}">
+                  <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
+                  <button type="button"
+                    class="${k}_button ${k}_button-s ${k}_button-secondary"
+                    attached="{{ root.chatConnected$::rx }}"
+                    onclick="{{ root.disconnectChat() }}">Leave</button>
+                </div>
+              </div>
 
-          <div class="${styles.chatActions}">
-            <button type="button"
-              class="${k}_button ${k}_button-s ${k}_button-primary"
-              onclick="{{ root.openChatRoom() }}">Open room</button>
-            <button type="button"
-              class="${k}_button ${k}_button-s ${k}_button-secondary"
-              onclick="{{ root.disconnectChat() }}">Leave</button>
-          </div>
+              <div class="${styles.chatActions}">
+                <button type="button"
+                  class="${k}_button ${k}_button-s ${k}_button-primary"
+                  disabled="{{ root.inCall$::rx }}"
+                  onclick="{{ root.openChatRoom() }}">Wait</button>
+                <button type="button"
+                  class="${k}_button ${k}_button-s ${k}_button-primary"
+                  attached="{{ !root.inCall$::rx }}"
+                  onclick="{{ root.openCallModal() }}">Call</button>
+              </div>
 
-          <div class="${styles.joinRow}">
+              <div class="${styles.videoGrid}">
+                <div class="${styles.videoTile}">
+                  <video id="localVideo" class="${styles.video}" autoplay playsinline muted></video>
+                  <div class="${styles.videoOverlay}">
+                    <div class="${styles.videoBadge}" attached="{{ !root.isAudioEnabled$::rx }}">🔇</div>
+                    <div class="${styles.videoBadge}" attached="{{ !root.isVideoEnabled$::rx }}">🚫</div>
+                  </div>
+                </div>
+
+                <div class="${styles.videoTile}">
+                  <video id="remoteVideo" class="${styles.video}" autoplay playsinline></video>
+                  <div class="${styles.videoOverlay}">
+                    <div class="${styles.videoBadge}" attached="{{ !root.isRemoteAudioEnabled$::rx }}">🔇</div>
+                    <div class="${styles.videoBadge}" attached="{{ !root.isRemoteVideoEnabled$::rx }}">🚫</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="${styles.mediaControls}">
+                <button type="button"
+                  class="${k}_button ${k}_button-s ${k}_button-secondary"
+                  disabled="{{ !root.inCall$::rx }}"
+                  onclick="{{ root.toggleVideo() }}">
+                  {{ root.isVideoEnabled$::rx ? 'Camera Off' : 'Camera On' }}
+                </button>
+                <button type="button"
+                  class="${k}_button ${k}_button-s ${k}_button-secondary"
+                  disabled="{{ !root.inCall$::rx }}"
+                  onclick="{{ root.toggleAudio() }}">
+                  {{ root.isAudioEnabled$::rx ? 'Audio Off' : 'Audio On' }}
+                </button>
+              </div>
+
+              <div class="${styles.chatMessenger}">
+                <div class="${styles.chatSpinnerWrap}"
+                  attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}"
+                  is="spinner"
+                  component-id="chatSpinner"
+                  bucket-id="${this.innerBucket.id}">
+                  <div class="${styles.chatSpinnerSlot}"></div>
+                </div>
+
+                <div class="${styles.messages}" attached="{{ root.chatConnected$::rx }}">
+                  <div repeat="{{ root.chatMessages }}" class="${styles.messageRow}">
+                    <div class="${styles.message} ${styles.messageMe}" attached="{{ this::rx.from === 'me' }}">{{ this::rx.text }}</div>
+                    <div class="${styles.message} ${styles.messagePeer}" attached="{{ this::rx.from === 'peer' }}">{{ this::rx.text }}</div>
+                    <div class="${styles.message} ${styles.messageSystem}" attached="{{ this::rx.from === 'system' }}">{{ this::rx.text }}</div>
+                  </div>
+                </div>
+
+                <div class="${styles.composeRow}" attached="{{ root.chatConnected$::rx }}">
+                  <textarea
+                    class="${k}_textarea ${styles.chatInput}"
+                    placeholder="Message"
+                    value="{{ root.chatDraft$::rx }}"
+                    oninput="{{ root.chatDraft$.update(event.target.value) }}"></textarea>
+                  <button type="button"
+                    class="${k}_button ${k}_button-s ${k}_button-primary"
+                    onclick="{{ root.sendChat() }}">Send</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="${styles.callModalBackdrop}"
+          attached="{{ root.callModalOpen$::rx }}"
+          onclick="{{ root.closeCallModal(event) }}">
+          <div class="${styles.callModal}">
             <input type="text"
-              class="${k}_input ${styles.joinInput}"
-              placeholder="Enter Call ID to join"
+              class="${k}_input ${styles.callModalInput}"
+              placeholder="Call ID"
               value="{{ root.joinCallId$::rx }}"
               oninput="{{ root.joinCallId$.update(event.target.value) }}">
-            <button type="button"
-              class="${k}_button ${k}_button-s ${k}_button-primary"
-              onclick="{{ root.joinChatRoom() }}">Join</button>
-          </div>
-            
-            <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 0 15px;">
-            
-            <div style="position: relative; width: 50%; aspect-ratio: 4/3;">
-              <video id="localVideo" autoplay playsinline muted 
-                     style="width: 100%; height: 100%; background: #000; border-radius: 8px; object-fit: cover;">
-              </video>
-              
-              <div style="position: absolute; bottom: 8px; right: 8px; display: flex; gap: 6px;">
-                <div attached="{{ !root.isAudioEnabled$::rx }}" 
-                     style="background: rgba(0,0,0,0.7); padding: 4px 6px; border-radius: 6px; font-size: 14px;">
-                  🔇
-                </div>
-                <div attached="{{ !root.isVideoEnabled$::rx }}" 
-                     style="background: rgba(0,0,0,0.7); padding: 4px 6px; border-radius: 6px; font-size: 14px;">
-                  🚫
-                </div>
-              </div>
+            <div>
+              <button type="button"
+                class="${k}_button ${k}_button-s ${k}_button-primary mr_s"
+                disabled="{{ !root.joinCallId$::rx }}"
+                onclick="{{ root.submitCallModal() }}">Call</button>
+              <button type="button"
+                class="${k}_button ${k}_button-s ${k}_button-secondary"
+                onclick="{{ root.closeCallModal() }}">Cancel</button>
             </div>
-            
-            <div style="position: relative; width: 50%; aspect-ratio: 4/3;">
-              <video id="remoteVideo" autoplay playsinline 
-                     style="width: 100%; height: 100%; background: #000; border-radius: 8px; object-fit: cover;">
-              </video>
-              
-              <div style="position: absolute; bottom: 8px; right: 8px; display: flex; gap: 6px;">
-                <div attached="{{ !root.isRemoteAudioEnabled$::rx }}" 
-                     style="background: rgba(0,0,0,0.7); padding: 4px 6px; border-radius: 6px; font-size: 14px;">
-                  🔇
-                </div>
-                <div attached="{{ !root.isRemoteVideoEnabled$::rx }}" 
-                     style="background: rgba(0,0,0,0.7); padding: 4px 6px; border-radius: 6px; font-size: 14px;">
-                  🚫
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div style="display: flex; justify-content: center; gap: 12px; margin-bottom: 15px;">
-            <button type="button"
-              class="${k}_button ${k}_button-s ${k}_button-secondary"
-              onclick="{{ root.toggleVideo() }}">
-              {{ root.isVideoEnabled$::rx ? 'Camera Off' : 'Camera On' }}
-            </button>
-            <button type="button"
-              class="${k}_button ${k}_button-s ${k}_button-secondary"
-              onclick="{{ root.toggleAudio() }}">
-              {{ root.isAudioEnabled$::rx ? 'Audio Off' : 'Audio On' }}
-            </button>
-          </div>
-            
-          <div class="${styles.messages}">
-            <div repeat="{{ root.chatMessages }}" class="${styles.messageRow}">
-              <div class="${styles.message} ${styles.messageMe}" attached="{{ this::rx.from === 'me' }}">{{ this::rx.text }}</div>
-              <div class="${styles.message} ${styles.messagePeer}" attached="{{ this::rx.from === 'peer' }}">{{ this::rx.text }}</div>
-              <div class="${styles.message} ${styles.messageSystem}" attached="{{ this::rx.from === 'system' }}">{{ this::rx.text }}</div>
-            </div>
-          </div>  
-            
-          <div class="${styles.composeRow}">
-            <textarea
-              class="${k}_textarea ${styles.chatInput}"
-              placeholder="Message"
-              value="{{ root.chatDraft$::rx }}"
-              oninput="{{ root.chatDraft$.update(event.target.value) }}"></textarea>
-            <button type="button"
-              class="${k}_button ${k}_button-s ${k}_button-primary"
-              onclick="{{ root.sendChat() }}">Send</button>
           </div>
         </div>
       </div>`;
@@ -196,16 +230,35 @@ export class SecretAuthPageComponent extends AbstractComponent {
   connectedCallback() {
     componentsRegistryService.connectBucket(this.innerBucket);
     this.innerBucket.setState("secretAuth", this.emptyAuthState());
+    this.innerBucket.setValue("chatSpinner", SpinnerValue.inactive);
     super.connectedCallback();
+
+    this.newRxFunc(() => {
+      const loading = Boolean(this.inCall$.actual) && !this.chatConnected$.actual;
+      this.innerBucket.setValue(
+        "chatSpinner",
+        loading ? SpinnerValue.active : SpinnerValue.inactive,
+      );
+    }, this.inCall$, this.chatConnected$);
 
     this.newRxFunc((state) => {
       this.updateCallIdentity(state);
     }, this.secretAuthState$);
 
+    this.newRxFunc((hasIdentity) => {
+      if (hasIdentity) {
+        this.playAuthTransition();
+        return;
+      }
+      this.resetAuthTransition();
+    }, this.hasCallIdentity$);
+
     this.loadChallenge();
   }
 
   disconnectedCallback() {
+    this.stopIdentityScramble?.();
+    this.stopIdentityScramble = undefined;
     this.disconnectChat();
     super.disconnectedCallback();
   }
@@ -229,6 +282,24 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.startChat(roomId, "guest");
   }
 
+  openCallModal() {
+    this.joinCallId$.update("");
+    this.callModalOpen$.update(true);
+  }
+
+  closeCallModal(event?: Event) {
+    if (event && event.target !== event.currentTarget) return;
+    this.callModalOpen$.update(false);
+    this.joinCallId$.update("");
+  }
+
+  submitCallModal() {
+    const roomId = (this.joinCallId$.actual ?? "").trim();
+    if (!roomId) return;
+    this.callModalOpen$.update(false);
+    this.joinChatRoom();
+  }
+
   sendChat() {
     this.chatSession?.send(this.chatDraft$.actual ?? "");
     this.chatDraft$.update("");
@@ -238,6 +309,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.chatSession?.close();
     this.chatSession = null;
     this.chatStatus$.update("idle");
+    this.chatConnected$.update(false);
+    this.inCall$.update(false);
 
     // turn off camera and audio
     if (this.localStream) {
@@ -328,11 +401,13 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.disconnectChat();
     this.chatMessages = [];
     this.template.detectChanges();
+    this.inCall$.update(true);
 
     // Turn on the camera BEFORE connecting to the room
     try {
       await this.startCamera();
     } catch (err) {
+      this.inCall$.update(false);
       return;
     }
 
@@ -354,6 +429,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
         (status) => {
         this.chatStatus$.update(status);
+        this.chatConnected$.update(CHAT_CONNECTED_STATUSES.has(status));
 
         if (status === "chat ready" || status === "open" || status === "connected") {
           setTimeout(() => {
@@ -423,6 +499,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
     if (!pubKey || !state?.signed) {
       this.hasCallIdentity$.update(false);
       this.callIdentity$.update("");
+      this.pendingIdentity = "";
       return;
     }
 
@@ -430,9 +507,59 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
     pubKeyToCallIdentity(pubKey).then((identity) => {
       if (generation !== this.identityGeneration) return;
+      this.pendingIdentity = identity;
       this.callIdentity$.update(identity);
       this.hasCallIdentity$.update(true);
     });
+  }
+
+  private playAuthTransition() {
+    if (this.authTransitionStarted) return;
+    this.authTransitionStarted = true;
+
+    this.authPanelExiting$.update(true);
+
+    window.setTimeout(() => {
+      this.authPanelExiting$.update(false);
+      this.showAuthPanel$.update(false);
+      this.showHeader$.update(false);
+
+      this.showPostAuth$.update(true);
+      this.postAuthEntering$.update(false);
+      this.displayIdentity$.update("");
+      this.template.detectChanges();
+
+      requestAnimationFrame(() => {
+        this.postAuthEntering$.update(true);
+        this.startIdentityScramble(this.pendingIdentity);
+      });
+    }, EXIT_FADE_MS);
+  }
+
+  private startIdentityScramble(target: string) {
+    this.stopIdentityScramble?.();
+    if (!target) return;
+
+    this.stopIdentityScramble = runIdentityScramble(
+      target,
+      (value) => this.displayIdentity$.update(value),
+    );
+  }
+
+  private resetAuthTransition() {
+    this.authTransitionStarted = false;
+    this.pendingIdentity = "";
+    this.stopIdentityScramble?.();
+    this.stopIdentityScramble = undefined;
+
+    this.showAuthPanel$.update(true);
+    this.showHeader$.update(true);
+    this.showPostAuth$.update(false);
+    this.authPanelExiting$.update(false);
+    this.postAuthEntering$.update(false);
+    this.displayIdentity$.update("");
+
+    this.template.detectChanges();
   }
 
   private emptyAuthState(): SecretAuthState {
