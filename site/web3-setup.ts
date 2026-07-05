@@ -5,9 +5,18 @@ export const tonManifestUrl = new URL(
   window.location.href,
 ).href;
 
+web3Service.configure({
+  providers: [
+    { kind: "ethereum", transport: "extension" },
+    { kind: "ethereum", transport: "app" },
+    { kind: "ton", transport: "extension" },
+    { kind: "ton", transport: "app" },
+  ],
+});
+
 web3Service.setTonManifestUrl(tonManifestUrl);
 
-const walletConnectProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID;
+const walletConnectProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID?.trim();
 
 if (walletConnectProjectId) {
   web3Service.setWalletConnectProjectId(walletConnectProjectId);

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
 import * as ts from "typescript";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 
 function typedCssModulesPlugin(rootDir: string) {
   let proc: ReturnType<typeof spawn> | undefined;
@@ -120,9 +120,12 @@ export function injectTplFileIntoAbstractComponents() {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, __dirname, "");
+
+  return {
   root: __dirname,
-  base: process.env.VITE_BASE_PATH ?? "/",
+  base: env.VITE_BASE_PATH ?? "/",
 
   plugins: [
     injectTplFileIntoAbstractComponents(),
@@ -152,4 +155,5 @@ export default defineConfig({
       },
     },
   },
+  };
 });

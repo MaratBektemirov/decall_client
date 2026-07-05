@@ -8,6 +8,7 @@ import "cruzo/ui-components/toast.css";
 import "cruzo/ui-components/spinner.css";
 import "cruzo/ui-components/margin.css";
 import "./css/common.css";
+import "site/web3-setup";
 
 import { Template, componentsRegistryService, routerService } from "cruzo";
 import { ToastComponent } from "cruzo/ui-components/toast";

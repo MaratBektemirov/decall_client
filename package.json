@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --config site/vite.config.ts",
-    "build": "vite build --config site/vite.config.ts"
+    "dev": "vite --config site/vite.config.ts --mode dev",
+    "build": "vite build --config site/vite.config.ts --mode prod"
   },
   "dependencies": {
     "cruzo": "0.9.889",

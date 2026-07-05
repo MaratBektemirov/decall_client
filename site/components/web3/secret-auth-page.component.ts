@@ -16,7 +16,6 @@ import { pubKeyToCallIdentity } from "site/utils/call-identity";
 import { runIdentityScramble } from "site/utils/identity-scramble";
 import { decallLog, formatDecallLogLine, subscribeDecallLog } from "site/utils/decall-log";
 import { ChatSession, type ChatMessage } from "site/webrtc/chat-session";
-import "site/web3-setup";
 
 const EXIT_FADE_MS = 520;
 const LOGO_SRC = `${import.meta.env.BASE_URL}logo.svg`;

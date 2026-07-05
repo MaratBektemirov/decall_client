@@ -14,7 +14,7 @@ Built with [Cruzo](https://www.npmjs.com/package/cruzo), [cruzo-web3](https://ww
 
 ```bash
 npm install
-cp site/.env.example site/.env   # optional: VITE_API_BASE, WalletConnect
+# paste WalletConnect id into site/.env.dev and site/.env.prod
 npm run dev
 ```
 
@@ -39,9 +39,17 @@ cd ../decall_server && make dev
 | `npm run dev` | Vite dev server (`:5173`) |
 | `npm run build` | Production build → `dist-site/` |
 
-## Env (`site/.env`)
+## Env
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VITE_API_BASE` | `/api` | API base URL (proxied in dev) |
-| `VITE_WALLETCONNECT_PROJECT_ID` | — | WalletConnect project id (optional) |
+| File | Used by | Description |
+|------|---------|-------------|
+| `site/.env.dev` | `npm run dev` | Dev API proxy, WalletConnect |
+| `site/.env.prod` | `npm run build` | Production API, base path, WalletConnect |
+
+| Variable | Dev | Prod |
+|----------|-----|------|
+| `VITE_API_BASE` | `/api` | `https://server-01.decall.app/api` |
+| `VITE_BASE_PATH` | `/` (default) | `/` |
+| `VITE_WALLETCONNECT_PROJECT_ID` | [WalletConnect](https://cloud.walletconnect.com) project id (optional for MetaMask extension) |
+
+GitHub Actions can override build vars via repository variables (`VITE_*` in `deploy.yml`).
