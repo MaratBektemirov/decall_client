@@ -13,6 +13,7 @@ import { ChatSession, type ChatMessage } from "site/webrtc/chat-session";
 import "site/web3-setup";
 
 const EXIT_FADE_MS = 520;
+const LOGO_SRC = `${import.meta.env.BASE_URL}logo.svg`;
 
 const CHAT_CONNECTED_STATUSES = new Set(["chat ready", "open", "connected"]);
 
@@ -77,7 +78,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
     return `<div class="${styles.page}">
         <header class="${styles.header} {{ root.authPanelExiting$::rx ? '${styles.headerExiting}' : '' }}"
           attached="{{ root.showHeader$::rx }}">
-          <img class="${styles.logo}" src="/logo.svg" alt="Decall">
+          <img class="${styles.logo}" src="${LOGO_SRC}" alt="Decall">
         </header>
 
         <div class="${styles.panel} {{ root.authPanelExiting$::rx ? '${styles.panelExiting}' : '' }}"
@@ -106,7 +107,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
             <div class="${styles.chatCard}">
               <div class="${styles.identityHead}">
                 <div class="${styles.chatHeadBrand}">
-                  <img class="${styles.chatLogo}" src="/logo.svg" alt="Decall">
+                  <img class="${styles.chatLogo}" src="${LOGO_SRC}" alt="Decall">
                   <div class="${styles.chatHeadText}">
                     <span class="${styles.chatBrandTitle}">Decentralized calls</span>
                     <div class="${styles.chatIdentityRow}">
