@@ -599,6 +599,33 @@ export class SecretAuthPageComponent extends AbstractComponent {
     }
   }
 
+  private async ensureLocalMedia() {
+    if (this.localStream?.getTracks().length) {
+      this.bindLocalPreview();
+      return;
+    }
+
+    decallLog("media", "Requesting camera and microphone");
+
+    try {
+      this.localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      decallLog("media", "Camera and microphone granted");
+      this.bindLocalPreview();
+      return;
+    } catch (err) {
+      decallLog("media", "Camera unavailable, trying audio only", err, "warn");
+    }
+
+    try {
+      this.localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+      decallLog("media", "Microphone granted (audio only)");
+      this.bindLocalPreview();
+    } catch (audioErr) {
+      decallLog("media", "Microphone denied or unavailable", audioErr, "error");
+      throw audioErr;
+    }
+  }
+
   copyCallID() {
     const id = this.callIdentity$.actual;
     if (!id) return;
