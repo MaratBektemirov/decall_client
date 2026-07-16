@@ -12,10 +12,10 @@ function canonicalPubKey(pubKey: WalletPubKey) {
 export async function pubKeyToCallIdentity(
   pubKey: WalletPubKey,
 ): Promise<string> {
-  // Собираем строку ключа
+  // Key collecting
   const canonicalString = canonicalPubKey(pubKey);
 
-  // Отправляю строку на бэкенд
+  // send pub-key to backend
   const url = `${apiBase}/generate-id?pubkey=${encodeURIComponent(canonicalString)}`;
   decallLog("api", "GET generate-id");
 
@@ -26,7 +26,7 @@ export async function pubKeyToCallIdentity(
     throw new Error("Failed to generate Call ID from server");
   }
 
-  // Получаем от сервера готовый результат со словами
+  // get the result from server
   const data = await response.json();
 
   decallLog("api", "Call ID generated");
