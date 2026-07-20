@@ -264,13 +264,13 @@ export class ChatSession {
 
     this.pc.ontrack = (event) => {
       if (gen !== this.connectionGen) return;
-      const stream = event.streams?.[0];
+      const stream = event.streams?.[0] ?? new MediaStream([event.track]);
       this.log("webrtc", "Remote track received", {
         kind: event.track.kind,
         streamId: stream?.id,
         trackCount: stream?.getTracks().length,
       });
-      if (stream) this.onRemoteStream(stream);
+      this.onRemoteStream(stream);
     };
 
     this.pc.onicecandidate = (event) => {

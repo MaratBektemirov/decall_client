@@ -64,6 +64,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
   pendingJoinCallId$ = this.newRx("");
   showJoinPrompt$ = this.newRx(false);
   private localStream: MediaStream | null = null;
+  private remoteStream: MediaStream | null = null;
   isAudioEnabled$ = this.newRx(false);
   isVideoEnabled$ = this.newRx(false);
   // states for the remote user
@@ -279,6 +280,22 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 </button>
               </div>
 
+              <button type="button"
+                class="${styles.peerPreview}"
+                attached="{{ root.chatConnected$::rx }}"
+                aria-label="Open video"
+                onclick="{{ root.openVideoModal() }}">
+                <video id="remoteVideoPreview" class="${styles.peerPreviewVideo}" autoplay playsinline muted></video>
+                <div class="${styles.peerPreviewPlaceholder}"
+                  attached="{{ !root.isRemoteVideoEnabled$::rx || root.peerVideoHidden$::rx }}">
+                  <span class="${styles.peerPreviewPlaceholderText}">
+                    {{ root.peerVideoHidden$::rx ? 'Video hidden' : 'Camera off' }}
+                  </span>
+                </div>
+                <span class="${styles.peerPreviewHint}">Tap to expand</span>
+              </button>
+              <audio id="remoteAudio" autoplay playsinline hidden attached="{{ root.inCall$::rx }}"></audio>
+
               <details class="${styles.connectionLog}" attached="{{ root.inCall$::rx }}">
                 <summary class="${styles.connectionLogSummary}">Connection log</summary>
                 <pre class="${styles.connectionLogPre}">{{ root.connectionLogText$::rx }}</pre>
@@ -318,7 +335,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
                 attached="{{ root.videoModalOpen$::rx }}"
                 onclick="{{ root.closeVideoModal(event) }}">
                 <div class="${styles.videoStage}" onclick="event.stopPropagation()">
-                  <video id="remoteVideo" class="${styles.remoteVideo}" autoplay playsinline></video>
+                  <video id="remoteVideo" class="${styles.remoteVideo}" autoplay playsinline muted></video>
                   <div class="${styles.remoteVideoPlaceholder}"
                     attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}">
                     <span class="${styles.remoteVideoPlaceholderText}">Waiting for peer…</span>
@@ -712,6 +729,14 @@ export class SecretAuthPageComponent extends AbstractComponent {
     const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
     if (remoteVideo) remoteVideo.srcObject = null;
 
+    const remotePreview = document.getElementById("remoteVideoPreview") as HTMLVideoElement | null;
+    if (remotePreview) remotePreview.srcObject = null;
+
+    const remoteAudio = document.getElementById("remoteAudio") as HTMLAudioElement | null;
+    if (remoteAudio) remoteAudio.srcObject = null;
+
+    this.remoteStream = null;
+
     const localVideo = document.getElementById("localVideo") as HTMLVideoElement | null;
     if (localVideo) localVideo.srcObject = null;
   }
@@ -761,11 +786,27 @@ export class SecretAuthPageComponent extends AbstractComponent {
       localVideo.srcObject = this.localStream;
     }
 
+    this.bindRemoteMedia();
+  }
+
+  private bindRemoteMedia() {
+    const stream = this.remoteStream;
+    const preview = document.getElementById("remoteVideoPreview") as HTMLVideoElement | null;
     const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
-    const remoteStream = remoteVideo?.srcObject as MediaStream | null;
-    if (remoteVideo && remoteStream) {
-      remoteVideo.srcObject = remoteStream;
+    const remoteAudio = document.getElementById("remoteAudio") as HTMLAudioElement | null;
+
+    for (const el of [preview, remoteVideo]) {
+      if (!el) continue;
+      el.srcObject = stream;
+      if (stream) void el.play().catch(() => {});
     }
+
+    if (remoteAudio) {
+      remoteAudio.srcObject = stream;
+      if (stream) void remoteAudio.play().catch(() => {});
+    }
+
+    this.applyRemoteMediaPlayback();
   }
 
   private stopLocalMedia() {
@@ -875,9 +916,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
   }
 
   private applyRemoteMediaPlayback() {
-    const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
-    if (!remoteVideo) return;
-    remoteVideo.muted = this.peerAudioMuted$.actual;
+    const remoteAudio = document.getElementById("remoteAudio") as HTMLAudioElement | null;
+    if (remoteAudio) {
+      remoteAudio.muted = this.peerAudioMuted$.actual;
+    }
   }
 
   private async toggleAudioAsync() {
@@ -1021,22 +1063,31 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
       (remoteStream) => {
         if (sessionGen !== this.chatSessionGen) return;
-        const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement;
-        if (remoteVideo) {
-          remoteVideo.srcObject = remoteStream;
+
+        if (!this.remoteStream) {
+          this.remoteStream = remoteStream;
+        } else if (this.remoteStream.id !== remoteStream.id) {
+          for (const track of remoteStream.getTracks()) {
+            const exists = this.remoteStream.getTracks().some((t) => t.id === track.id);
+            if (!exists) this.remoteStream.addTrack(track);
+          }
         }
-        this.applyRemoteMediaPlayback();
-        this.isRemoteVideoEnabled$.update(remoteStream.getVideoTracks().some((t) => t.enabled));
-        this.isRemoteAudioEnabled$.update(remoteStream.getAudioTracks().some((t) => t.enabled));
+
+        this.template.detectChanges();
+        requestAnimationFrame(() => this.bindRemoteMedia());
+        this.isRemoteVideoEnabled$.update(this.remoteStream.getVideoTracks().some((t) => t.enabled));
+        this.isRemoteAudioEnabled$.update(this.remoteStream.getAudioTracks().some((t) => t.enabled));
       },
 
       () => {
         if (sessionGen !== this.chatSessionGen) return;
+        this.remoteStream = null;
         const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
-        if (remoteVideo?.srcObject instanceof MediaStream) {
-          remoteVideo.srcObject.getTracks().forEach((track) => track.stop());
-          remoteVideo.srcObject = null;
-        }
+        if (remoteVideo) remoteVideo.srcObject = null;
+        const remotePreview = document.getElementById("remoteVideoPreview") as HTMLVideoElement | null;
+        if (remotePreview) remotePreview.srcObject = null;
+        const remoteAudio = document.getElementById("remoteAudio") as HTMLAudioElement | null;
+        if (remoteAudio) remoteAudio.srcObject = null;
         this.isRemoteVideoEnabled$.update(false);
         this.isRemoteAudioEnabled$.update(false);
       },
