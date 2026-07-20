@@ -27,6 +27,11 @@ import {
 import { runIdentityScramble } from "site/utils/identity-scramble";
 import { decallLog, formatDecallLogLine, subscribeDecallLog } from "site/utils/decall-log";
 import { ChatSession, type ChatMessage } from "site/webrtc/chat-session";
+import {
+  MESSENGER_INCOMING,
+  MESSENGER_OUTGOING,
+  messengerBubbleTailSvg,
+} from "site/utils/messenger-bubble";
 
 const EXIT_FADE_MS = 520;
 const LOGO_SRC = `${import.meta.env.BASE_URL}logo.svg`;
@@ -305,15 +310,30 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
               <div class="${styles.chatMessenger}" attached="{{ root.chatConnected$::rx }}">
                 <div class="${styles.messages}">
-                  <div repeat="{{ root.chatMessages }}" class="${styles.messageRow}">
-                    <div class="${styles.message} ${styles.messageMe}" attached="{{ this::rx.from === 'me' }}">{{ this::rx.text }}</div>
-                    <div class="${styles.message} ${styles.messagePeer}" attached="{{ this::rx.from === 'peer' }}">{{ this::rx.text }}</div>
-                    <div class="${styles.message} ${styles.messageSystem}" attached="{{ this::rx.from === 'system' }}">{{ this::rx.text }}</div>
+                  <div repeat="{{ root.chatMessages }}"
+                    class="${styles.messageRow} {{ this::rx.from === 'me' ? '${styles.messageRowMe}' : '' }} {{ this::rx.from === 'peer' ? '${styles.messageRowPeer}' : '' }} {{ this::rx.from === 'system' ? '${styles.messageRowSystem}' : '' }}">
+                    <div class="${styles.messageBubble} ${styles.messageBubbleMe}"
+                      attached="{{ this::rx.from === 'me' }}">
+                      <div class="${styles.messageBubbleTail} ${styles.messageBubbleTailMe}">
+                        <div class="${styles.messageBubbleTailSvg}"
+                          inner-html="{{ root.chatBubbleTailSvg(this::rx.from) }}"></div>
+                      </div>
+                      <div class="${styles.messageBubbleText}">{{ this::rx.text }}</div>
+                    </div>
+                    <div class="${styles.messageBubble} ${styles.messageBubblePeer}"
+                      attached="{{ this::rx.from === 'peer' }}">
+                      <div class="${styles.messageBubbleTail} ${styles.messageBubbleTailPeer}">
+                        <div class="${styles.messageBubbleTailSvg}"
+                          inner-html="{{ root.chatBubbleTailSvg(this::rx.from) }}"></div>
+                      </div>
+                      <div class="${styles.messageBubbleText}">{{ this::rx.text }}</div>
+                    </div>
+                    <div class="${styles.messageSystem}" attached="{{ this::rx.from === 'system' }}">{{ this::rx.text }}</div>
                   </div>
                 </div>
 
                 <div class="${styles.typingRow}" attached="{{ root.peerTyping$::rx }}">
-                  <div class="${styles.typingBubble}">
+                  <div class="${styles.typingDots}">
                     <span class="${styles.typingDot}"></span>
                     <span class="${styles.typingDot}"></span>
                     <span class="${styles.typingDot}"></span>
@@ -326,7 +346,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
                     class="${k}_textarea ${styles.chatInput}"
                     placeholder="Message"
                     value="{{ root.chatDraft$::rx }}"
-                    oninput="{{ root.onChatInput(event.target.value) }}"></textarea>
+                    oninput="{{ root.onChatInput(event.target.value) }}"
+                    onkeydown="{{ root.onChatKeydown(event) }}"></textarea>
                   <button type="button"
                     class="${k}_button ${k}_button-s ${k}_button-primary"
                     onclick="{{ root.sendChat() }}">Send</button>
@@ -754,6 +775,18 @@ export class SecretAuthPageComponent extends AbstractComponent {
     } else {
       this.stopTypingNotify();
     }
+  }
+
+  onChatKeydown(event: KeyboardEvent) {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    this.sendChat();
+  }
+
+  chatBubbleTailSvg(from: ChatMessage["from"]) {
+    if (from === "me") return messengerBubbleTailSvg("right", MESSENGER_OUTGOING);
+    if (from === "peer") return messengerBubbleTailSvg("left", MESSENGER_INCOMING);
+    return "";
   }
 
   private startTypingNotify() {
