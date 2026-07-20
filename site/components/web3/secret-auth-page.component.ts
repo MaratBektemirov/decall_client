@@ -24,7 +24,6 @@ import {
   clearJoinFromUrl,
   parseJoinCallId,
 } from "site/utils/invite-link";
-import { runIdentityScramble } from "site/utils/identity-scramble";
 import { decallLog, formatDecallLogLine, subscribeDecallLog } from "site/utils/decall-log";
 import { ChatSession, type ChatMessage } from "site/webrtc/chat-session";
 import {
@@ -60,7 +59,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
   ]);
 
   callIdentity$ = this.newRx("");
-  displayIdentity$ = this.newRx("");
   hasCallIdentity$ = this.newRx(false);
   showAuthPanel$ = this.newRx(true);
   showHeader$ = this.newRx(true);
@@ -121,8 +119,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
   private chatSessionGen = 0;
   private homeRoomActive = false;
   private authTransitionStarted = false;
-  private pendingIdentity = "";
-  private stopIdentityScramble?: () => void;
   private unsubscribeDecallLog?: () => void;
   private connectionLogLines: string[] = [];
   private typingStopTimer = 0;
@@ -202,7 +198,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
                       title="Media relayed via TURN server">TURN</span>
                   </div>
                   <div class="${styles.chatIdentityRow}">
-                    <span class="${styles.chatIdentityId}">{{ root.displayIdentity$::rx }}</span>
+                    <span class="${styles.chatIdentityId}">{{ root.callIdentity$::rx }}</span>
                     <button type="button"
                       class="${styles.copyInviteButton}"
                       title="Copy invite link"
@@ -430,14 +426,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
                         </button>
                       </div>
                     </div>
-                    <div class="${styles.mediaGroupDivider} ${styles.mediaGroupDividerDark}" aria-hidden="true"></div>
-                    <button type="button"
-                      class="${styles.mediaButton} ${styles.mediaButtonDanger}"
-                      aria-label="Disconnect"
-                      attached="{{ root.inCall$::rx }}"
-                      onclick="{{ root.disconnectChat() }}">
-                      <span class="${styles.disconnectIcon}"></span>
-                    </button>
                   </div>
                 </div>
               </div>
@@ -524,8 +512,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
   disconnectedCallback() {
     this.unsubscribeDecallLog?.();
     this.unsubscribeDecallLog = undefined;
-    this.stopIdentityScramble?.();
-    this.stopIdentityScramble = undefined;
     this.clearTypingTimers();
     this.endCall({ returnHome: false });
     super.disconnectedCallback();
@@ -1311,7 +1297,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
     if (!pubKey || !state?.signed) {
       this.hasCallIdentity$.update(false);
       this.callIdentity$.update("");
-      this.pendingIdentity = "";
       return;
     }
 
@@ -1319,7 +1304,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
     pubKeyToCallIdentity(pubKey).then((identity) => {
       if (generation !== this.identityGeneration) return;
-      this.pendingIdentity = identity;
       this.callIdentity$.update(identity);
       this.hasCallIdentity$.update(true);
     });
@@ -1338,12 +1322,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
       this.showPostAuth$.update(true);
       this.postAuthEntering$.update(false);
-      this.displayIdentity$.update("");
       this.template.detectChanges();
 
       requestAnimationFrame(() => {
         this.postAuthEntering$.update(true);
-        this.startIdentityScramble(this.pendingIdentity);
 
         const pendingJoin = this.consumePendingJoinCallId();
         if (pendingJoin) {
@@ -1366,21 +1348,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
     }, EXIT_FADE_MS);
   }
 
-  private startIdentityScramble(target: string) {
-    this.stopIdentityScramble?.();
-    if (!target) return;
-
-    this.stopIdentityScramble = runIdentityScramble(
-      target,
-      (value) => this.displayIdentity$.update(value),
-    );
-  }
-
   private resetAuthTransition() {
     this.authTransitionStarted = false;
-    this.pendingIdentity = "";
-    this.stopIdentityScramble?.();
-    this.stopIdentityScramble = undefined;
     this.stopLocalMedia();
 
     this.showAuthPanel$.update(true);
@@ -1388,7 +1357,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.showPostAuth$.update(false);
     this.authPanelExiting$.update(false);
     this.postAuthEntering$.update(false);
-    this.displayIdentity$.update("");
 
     this.template.detectChanges();
   }
