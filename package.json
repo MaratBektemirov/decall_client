@@ -8,8 +8,8 @@
     "build": "vite build --config site/vite.config.ts --mode prod"
   },
   "dependencies": {
-    "cruzo": "0.9.889",
-    "cruzo-web3": "0.2.0"
+    "cruzo": "1.1.0",
+    "cruzo-web3": "0.3.0"
   },
   "devDependencies": {
     "@types/node": "25.0.3",
