@@ -9,6 +9,7 @@ import { UI_KIT } from "cruzo/ui-components/const";
 import { SpinnerComponent, SpinnerConfig, SpinnerValue } from "cruzo/ui-components/spinner";
 import { SecretAuthComponent } from "cruzo-web3/components/secret-auth";
 import type { SecretAuthState } from "cruzo-web3";
+import { secretAuthService } from "cruzo-web3";
 
 import { fetchAuthChallenge } from "site/services/auth-api";
 import { fetchTurnIceServers } from "site/services/ice-servers";
@@ -51,6 +52,9 @@ export class SecretAuthPageComponent extends AbstractComponent {
   isRemoteVideoEnabled$ = this.newRx(false);
   challengeLoading$ = this.newRx(false);
   challengeError$ = this.newRx("");
+  ephemeralPreviewCallId$ = this.newRx("");
+  ephemeralPreviewLoading$ = this.newRx(false);
+  showEphemeralPreview$ = this.newRx(false);
 
   joinCallId$ = this.newRx("");
   callModalOpen$ = this.newRx(false);
@@ -84,6 +88,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
   secretAuthState$ = this.newRxStateFromBucket(this.innerBucket, "secretAuth");
 
   private identityGeneration = 0;
+  private ephemeralPreviewGeneration = 0;
   private challengeGeneration = 0;
   private chatSession: ChatSession | null = null;
   private authTransitionStarted = false;
@@ -117,6 +122,18 @@ export class SecretAuthPageComponent extends AbstractComponent {
               onclick="{{ root.refreshChallenge() }}">
               {{ root.challengeLoading$::rx ? 'Loading challenge…' : 'Refresh challenge' }}
             </button>
+          </div>
+
+          <div class="${styles.ephemeralPreview}" attached="{{ root.showEphemeralPreview$::rx }}">
+            <span class="${styles.ephemeralPreviewLabel}">Your Call ID</span>
+            <code class="${styles.ephemeralPreviewId}"
+              attached="{{ !root.ephemeralPreviewLoading$::rx }}">
+              {{ root.ephemeralPreviewCallId$::rx }}
+            </code>
+            <span class="${styles.ephemeralPreviewStatus}"
+              attached="{{ root.ephemeralPreviewLoading$::rx }}">
+              Generating…
+            </span>
           </div>
 
           <secret-auth-component
@@ -352,7 +369,14 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
     this.newRxFunc((state) => {
       this.updateCallIdentity(state);
+      this.updateEphemeralPreviewFromState(state);
     }, this.secretAuthState$);
+
+    this.newRxFunc((pubKey) => {
+      const state = this.secretAuthState$.actual;
+      if (state?.signed || state?.mode !== "ephemeral") return;
+      this.updateEphemeralPreview(pubKey);
+    }, secretAuthService.ephemeralPubKey$);
 
     this.newRxFunc((hasIdentity) => {
       if (hasIdentity) {
@@ -379,6 +403,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.disconnectChat();
     this.hasCallIdentity$.update(false);
     this.callIdentity$.update("");
+    this.clearEphemeralPreview();
     this.loadChallenge();
   }
 
@@ -894,6 +919,52 @@ export class SecretAuthPageComponent extends AbstractComponent {
         if (generation !== this.challengeGeneration) return;
         this.challengeLoading$.update(false);
       });
+  }
+
+  private updateEphemeralPreviewFromState(state: SecretAuthState | null | undefined) {
+    if (state?.signed || state?.mode !== "ephemeral") {
+      this.clearEphemeralPreview();
+      return;
+    }
+
+    const pubKey = secretAuthService.getEphemeralPubKey() ?? state.pubKey;
+    this.updateEphemeralPreview(pubKey);
+  }
+
+  private updateEphemeralPreview(pubKey: SecretAuthState["pubKey"]) {
+    if (!pubKey) {
+      this.showEphemeralPreview$.update(false);
+      this.ephemeralPreviewCallId$.update("");
+      this.ephemeralPreviewLoading$.update(false);
+      return;
+    }
+
+    const generation = ++this.ephemeralPreviewGeneration;
+
+    this.showEphemeralPreview$.update(true);
+    this.ephemeralPreviewLoading$.update(true);
+    this.ephemeralPreviewCallId$.update("");
+
+    pubKeyToCallIdentity(pubKey)
+      .then((identity) => {
+        if (generation !== this.ephemeralPreviewGeneration) return;
+        this.ephemeralPreviewCallId$.update(identity);
+        this.ephemeralPreviewLoading$.update(false);
+      })
+      .catch((err: unknown) => {
+        if (generation !== this.ephemeralPreviewGeneration) return;
+        decallLog("api", "Ephemeral Call ID preview failed", err, "error");
+        this.showEphemeralPreview$.update(false);
+        this.ephemeralPreviewCallId$.update("");
+        this.ephemeralPreviewLoading$.update(false);
+      });
+  }
+
+  private clearEphemeralPreview() {
+    this.ephemeralPreviewGeneration += 1;
+    this.showEphemeralPreview$.update(false);
+    this.ephemeralPreviewCallId$.update("");
+    this.ephemeralPreviewLoading$.update(false);
   }
 
   private updateCallIdentity(state: SecretAuthState | null | undefined) {
