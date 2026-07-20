@@ -9,10 +9,17 @@ import { UI_KIT } from "cruzo/ui-components/const";
 import { SpinnerComponent, SpinnerConfig, SpinnerValue } from "cruzo/ui-components/spinner";
 import { SecretAuthComponent } from "cruzo-web3/components/secret-auth";
 import type { SecretAuthState } from "cruzo-web3";
+import { secretAuthService } from "cruzo-web3";
+import type { SecretAuthMode } from "cruzo-web3";
 
 import { fetchAuthChallenge } from "site/services/auth-api";
 import { fetchTurnIceServers } from "site/services/ice-servers";
 import { pubKeyToCallIdentity } from "site/utils/call-identity";
+import {
+  buildInviteLink,
+  clearJoinFromUrl,
+  parseJoinCallId,
+} from "site/utils/invite-link";
 import { runIdentityScramble } from "site/utils/identity-scramble";
 import { decallLog, formatDecallLogLine, subscribeDecallLog } from "site/utils/decall-log";
 import { ChatSession, type ChatMessage } from "site/webrtc/chat-session";
@@ -50,6 +57,9 @@ export class SecretAuthPageComponent extends AbstractComponent {
   authPanelExiting$ = this.newRx(false);
   postAuthEntering$ = this.newRx(false);
   copyLabel$ = this.newRx("Copy ID");
+  copyLinkLabel$ = this.newRx("Copy link");
+  pendingJoinCallId$ = this.newRx("");
+  showJoinPrompt$ = this.newRx(false);
   private localStream: MediaStream | null = null;
   isAudioEnabled$ = this.newRx(false);
   isVideoEnabled$ = this.newRx(false);
@@ -138,6 +148,24 @@ export class SecretAuthPageComponent extends AbstractComponent {
           </secret-auth-component>
         </div>
 
+        <div class="${styles.callModalBackdrop}"
+          attached="{{ root.showJoinPrompt$::rx && root.showAuthPanel$::rx }}">
+          <div class="${styles.joinRequestModal}">
+            <p class="${styles.joinRequestText}">
+              You're invited to join a call.<br>
+              Sign in with a one-time <strong>ephemeral</strong> key?
+            </p>
+            <div class="${styles.joinRequestActions}">
+              <button type="button"
+                class="${k}_button ${k}_button-s ${k}_button-primary"
+                onclick="{{ root.chooseEphemeralJoin() }}">Ephemeral</button>
+              <button type="button"
+                class="${k}_button ${k}_button-s ${k}_button-secondary"
+                onclick="{{ root.chooseOtherJoinMethod() }}">Choose method</button>
+            </div>
+          </div>
+        </div>
+
         <div class="${styles.postAuth}" attached="{{ root.showPostAuth$::rx }}">
           <div class="${styles.postAuthInner} {{ root.postAuthEntering$::rx ? '${styles.postAuthEnter}' : '${styles.postAuthHidden}' }}">
             <div class="${styles.chatCard}">
@@ -168,6 +196,11 @@ export class SecretAuthPageComponent extends AbstractComponent {
                       class="${k}_button ${k}_button-s ${k}_button-secondary"
                       onclick="{{ root.copyCallID() }}">
                       {{ root.copyLabel$::rx }}
+                    </button>
+                    <button type="button"
+                      class="${k}_button ${k}_button-s ${k}_button-secondary"
+                      onclick="{{ root.copyInviteLink() }}">
+                      {{ root.copyLinkLabel$::rx }}
                     </button>
                   </div>
                 </div>
@@ -419,6 +452,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
     componentsRegistryService.connectBucket(this.innerBucket);
     this.innerBucket.setState("secretAuth", this.emptyAuthState());
     this.innerBucket.setValue("chatSpinner", SpinnerValue.inactive);
+    this.bootstrapInviteJoin();
     super.connectedCallback();
 
     this.newRxFunc(() => {
@@ -458,7 +492,64 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.endCall({ returnHome: false });
     this.hasCallIdentity$.update(false);
     this.callIdentity$.update("");
+    this.pendingJoinCallId$.update("");
+    this.showJoinPrompt$.update(false);
     this.loadChallenge();
+  }
+
+  chooseEphemeralJoin() {
+    this.applyJoinAuthMode("ephemeral");
+    this.showJoinPrompt$.update(false);
+  }
+
+  chooseOtherJoinMethod() {
+    this.showJoinPrompt$.update(false);
+  }
+
+  copyInviteLink() {
+    const callId = this.callIdentity$.actual;
+    if (!callId) return;
+
+    const link = buildInviteLink(callId);
+
+    navigator.clipboard.writeText(link)
+      .then(() => {
+        this.copyLinkLabel$.update("Copied! ✓");
+        setTimeout(() => {
+          this.copyLinkLabel$.update("Copy link");
+        }, 2000);
+      })
+      .catch((err) => {
+        console.error("Failed to copy invite link: ", err);
+      });
+  }
+
+  private bootstrapInviteJoin() {
+    const joinId = parseJoinCallId();
+    if (!joinId) return;
+
+    this.pendingJoinCallId$.update(joinId);
+    this.showJoinPrompt$.update(true);
+    decallLog("session", "Invite link detected", { joinId });
+  }
+
+  private applyJoinAuthMode(mode: SecretAuthMode) {
+    secretAuthService.setMode(mode);
+
+    const state = this.innerBucket.getState("secretAuth") as SecretAuthState | undefined;
+    if (!state) return;
+
+    this.innerBucket.setState("secretAuth", {
+      ...state,
+      mode,
+    });
+  }
+
+  private consumePendingJoinCallId() {
+    const joinId = (this.pendingJoinCallId$.actual ?? "").trim();
+    this.pendingJoinCallId$.update("");
+    clearJoinFromUrl();
+    return joinId;
   }
 
   private openHomeRoom() {
@@ -1097,6 +1188,23 @@ export class SecretAuthPageComponent extends AbstractComponent {
       requestAnimationFrame(() => {
         this.postAuthEntering$.update(true);
         this.startIdentityScramble(this.pendingIdentity);
+
+        const pendingJoin = this.consumePendingJoinCallId();
+        if (pendingJoin) {
+          const ownId = this.callIdentity$.actual;
+          if (ownId && this.normalizeRoomId(pendingJoin) === this.normalizeRoomId(ownId)) {
+            this.appendChatMessage({
+              from: "system",
+              text: "Invite link points to your own Call ID — waiting for others instead.",
+            });
+            this.openHomeRoom();
+            return;
+          }
+
+          void this.startChat(pendingJoin, "guest");
+          return;
+        }
+
         this.openHomeRoom();
       });
     }, EXIT_FADE_MS);
