@@ -369,14 +369,12 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
     this.newRxFunc((state) => {
       this.updateCallIdentity(state);
-      this.updateEphemeralPreviewFromState(state);
+      this.syncEphemeralPreview();
     }, this.secretAuthState$);
 
-    this.newRxFunc((pubKey) => {
-      const state = this.secretAuthState$.actual;
-      if (state?.signed || state?.mode !== "ephemeral") return;
-      this.updateEphemeralPreview(pubKey);
-    }, secretAuthService.ephemeralPubKey$);
+    this.newRxFunc(() => {
+      this.syncEphemeralPreview();
+    }, secretAuthService.mode$, secretAuthService.ephemeralPubKey$);
 
     this.newRxFunc((hasIdentity) => {
       if (hasIdentity) {
@@ -921,14 +919,15 @@ export class SecretAuthPageComponent extends AbstractComponent {
       });
   }
 
-  private updateEphemeralPreviewFromState(state: SecretAuthState | null | undefined) {
-    if (state?.signed || state?.mode !== "ephemeral") {
+  private syncEphemeralPreview() {
+    const signed = this.secretAuthState$.actual?.signed;
+
+    if (signed || secretAuthService.getMode() !== "ephemeral") {
       this.clearEphemeralPreview();
       return;
     }
 
-    const pubKey = secretAuthService.getEphemeralPubKey() ?? state.pubKey;
-    this.updateEphemeralPreview(pubKey);
+    this.updateEphemeralPreview(secretAuthService.getEphemeralPubKey());
   }
 
   private updateEphemeralPreview(pubKey: SecretAuthState["pubKey"]) {
