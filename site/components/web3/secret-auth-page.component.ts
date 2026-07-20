@@ -216,6 +216,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
                 <div class="${styles.composeRow}">
                   <textarea
+                    id="chatDraftInput"
                     class="${k}_textarea ${styles.chatInput}"
                     placeholder="Message"
                     value="{{ root.chatDraft$::rx }}"
@@ -312,6 +313,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
           onclick="{{ root.closeCallModal(event) }}">
           <div class="${styles.callModal}">
             <input type="text"
+              id="joinCallInput"
               class="${k}_input ${styles.callModalInput}"
               placeholder="Call ID"
               value="{{ root.joinCallId$::rx }}"
@@ -395,17 +397,37 @@ export class SecretAuthPageComponent extends AbstractComponent {
   openCallModal() {
     this.joinCallId$.update("");
     this.callModalOpen$.update(true);
+
+    this.template.detectChanges();
+
+    requestAnimationFrame(() => {
+      const input = document.getElementById("joinCallInput") as HTMLInputElement | null;
+      if (input) {
+        input.value = "";
+      }
+    });
   }
 
   closeCallModal(event?: Event) {
     if (event && event.target !== event.currentTarget) return;
     this.callModalOpen$.update(false);
     this.joinCallId$.update("");
+
+    const input = document.getElementById("joinCallInput") as HTMLInputElement | null;
+    if (input) {
+      input.value = "";
+    }
   }
 
   submitCallModal() {
     const roomId = (this.joinCallId$.actual ?? "").trim();
     if (!roomId) return;
+
+    const input = document.getElementById("joinCallInput") as HTMLInputElement | null;
+    if (input) {
+      input.value = "";
+    }
+
     this.callModalOpen$.update(false);
     this.joinChatRoom();
   }
@@ -422,8 +444,17 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
   sendChat() {
     this.stopTypingNotify();
-    this.chatSession?.send(this.chatDraft$.actual ?? "");
+
+    const text = this.chatDraft$.actual ?? "";
+    if (!text.trim()) return; // Small protection: don't send empty messages
+
+    this.chatSession?.send(text);
     this.chatDraft$.update("");
+
+    const input = document.getElementById("chatDraftInput") as HTMLTextAreaElement | null;
+    if (input) {
+      input.value = "";
+    }
   }
 
   onChatInput(value: string) {
@@ -486,6 +517,12 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.isRemoteAudioEnabled$.update(false);
     this.isRemoteVideoEnabled$.update(false);
     this.chatDraft$.update("");
+
+    // Forcibly clear the DOM on exit
+    const draftInput = document.getElementById("chatDraftInput") as HTMLTextAreaElement | null;
+    if (draftInput) {
+      draftInput.value = "";
+    }
 
     const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
     if (remoteVideo) remoteVideo.srcObject = null;

@@ -3,3 +3,4 @@ dist-site/
 site/**/*.module.css.d.ts
 .DS_Store
 .idea
+site/.env
