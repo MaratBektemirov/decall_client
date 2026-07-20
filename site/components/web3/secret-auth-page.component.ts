@@ -2,6 +2,8 @@ import { MicrophoneIcon } from "site/icons/microphone";
 import { MicrophoneOffIcon } from "site/icons/microphone-off";
 import { VideoIcon } from "site/icons/video";
 import { VideoOffIcon } from "site/icons/video-off";
+import { CopyIcon } from "site/icons/copy";
+import { CheckIcon } from "site/icons/check";
 import styles from "./secret-auth-page.module.css";
 
 import { AbstractComponent, componentsRegistryService, Rx, RxBucket } from "cruzo";
@@ -41,6 +43,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
 
   dependencies = new Set([
     SecretAuthComponent.selector,
+    CopyIcon.selector,
+    CheckIcon.selector,
     SpinnerComponent.selector,
     VideoIcon.selector,
     VideoOffIcon.selector,
@@ -56,8 +60,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
   showPostAuth$ = this.newRx(false);
   authPanelExiting$ = this.newRx(false);
   postAuthEntering$ = this.newRx(false);
-  copyLabel$ = this.newRx("Copy ID");
-  copyLinkLabel$ = this.newRx("Copy link");
+  inviteLinkCopied$ = this.newRx(false);
   pendingJoinCallId$ = this.newRx("");
   showJoinPrompt$ = this.newRx(false);
   private localStream: MediaStream | null = null;
@@ -193,14 +196,14 @@ export class SecretAuthPageComponent extends AbstractComponent {
                   <div class="${styles.chatIdentityRow}">
                     <span class="${styles.chatIdentityId}">{{ root.displayIdentity$::rx }}</span>
                     <button type="button"
-                      class="${k}_button ${k}_button-s ${k}_button-secondary"
-                      onclick="{{ root.copyCallID() }}">
-                      {{ root.copyLabel$::rx }}
-                    </button>
-                    <button type="button"
-                      class="${k}_button ${k}_button-s ${k}_button-secondary"
+                      class="${styles.copyInviteButton}"
+                      title="Copy invite link"
+                      aria-label="Copy invite link"
                       onclick="{{ root.copyInviteLink() }}">
-                      {{ root.copyLinkLabel$::rx }}
+                      <copy-icon class="${styles.copyInviteIcon}"
+                        attached="{{ !root.inviteLinkCopied$::rx }}"></copy-icon>
+                      <check-icon class="${styles.copyInviteIcon} ${styles.copyInviteCheck}"
+                        attached="{{ root.inviteLinkCopied$::rx }}"></check-icon>
                     </button>
                   </div>
                 </div>
@@ -510,13 +513,11 @@ export class SecretAuthPageComponent extends AbstractComponent {
     const callId = this.callIdentity$.actual;
     if (!callId) return;
 
-    const link = buildInviteLink(callId);
-
-    navigator.clipboard.writeText(link)
+    navigator.clipboard.writeText(buildInviteLink(callId))
       .then(() => {
-        this.copyLinkLabel$.update("Copied! ✓");
+        this.inviteLinkCopied$.update(true);
         setTimeout(() => {
-          this.copyLinkLabel$.update("Copy link");
+          this.inviteLinkCopied$.update(false);
         }, 2000);
       })
       .catch((err) => {
@@ -857,23 +858,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
       decallLog("media", "Microphone denied or unavailable", audioErr, "error");
       throw audioErr;
     }
-  }
-
-  copyCallID() {
-    const id = this.callIdentity$.actual;
-    if (!id) return;
-
-    navigator.clipboard.writeText(id)
-        .then(() => {
-          this.copyLabel$.update("Copied! ✓");
-
-          setTimeout(() => {
-            this.copyLabel$.update("Copy ID");
-          }, 2000);
-        })
-        .catch((err) => {
-          console.error("Failed to copy ID: ", err);
-        });
   }
 
   toggleAudio() {
