@@ -13,6 +13,8 @@ import { SecretAuthComponent } from "cruzo-web3/components/secret-auth";
 import type { SecretAuthState } from "cruzo-web3";
 import { secretAuthService } from "cruzo-web3";
 import type { SecretAuthMode } from "cruzo-web3";
+import { formatSecretAuthChallenge } from "cruzo-web3/secret-auth";
+import type { SecretAuthProof, SecretAuthPubKey } from "cruzo-web3/secret-auth";
 
 import { fetchAuthChallenge } from "site/services/auth-api";
 import { fetchTurnIceServers } from "site/services/ice-servers";
@@ -520,6 +522,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
   chooseEphemeralJoin() {
     this.applyJoinAuthMode("ephemeral");
     this.showJoinPrompt$.update(false);
+    void this.signInEphemeralForInvite();
   }
 
   chooseOtherJoinMethod() {
@@ -561,6 +564,91 @@ export class SecretAuthPageComponent extends AbstractComponent {
       ...state,
       mode,
     });
+  }
+
+  private buildEphemeralProof(
+    message: string,
+    signature: string,
+    pubKey: SecretAuthPubKey,
+  ): SecretAuthProof {
+    return {
+      message,
+      signature: { value: signature },
+      pubKey,
+    };
+  }
+
+  private waitForAuthChallenge(timeoutMs = 15000): Promise<NonNullable<SecretAuthState["challenge"]>> {
+    const started = Date.now();
+
+    return new Promise((resolve, reject) => {
+      const tick = () => {
+        const state = this.innerBucket.getState("secretAuth") as SecretAuthState | undefined;
+
+        if (state?.challenge) {
+          resolve(state.challenge);
+          return;
+        }
+
+        const error = this.challengeError$.actual;
+        if (error) {
+          reject(new Error(error));
+          return;
+        }
+
+        if (!this.challengeLoading$.actual && Date.now() - started > 500) {
+          reject(new Error("Challenge is not available"));
+          return;
+        }
+
+        if (Date.now() - started >= timeoutMs) {
+          reject(new Error("Challenge request timed out"));
+          return;
+        }
+
+        window.requestAnimationFrame(tick);
+      };
+
+      tick();
+    });
+  }
+
+  private async signInEphemeralForInvite() {
+    const joinId = (this.pendingJoinCallId$.actual ?? "").trim();
+    if (!joinId) return;
+
+    if (this.secretAuthState$.actual?.signed) {
+      const pendingJoin = this.consumePendingJoinCallId();
+      if (pendingJoin) void this.startChat(pendingJoin, "guest");
+      return;
+    }
+
+    try {
+      const challenge = await this.waitForAuthChallenge();
+      const state = this.innerBucket.getState("secretAuth") as SecretAuthState | undefined;
+      if (!state) throw new Error("Auth state is not ready");
+
+      const message = formatSecretAuthChallenge(challenge);
+      const { pubKey, signature, publicKey } = await secretAuthService.signEphemeral(message);
+      const proof = this.buildEphemeralProof(message, signature, pubKey);
+
+      this.innerBucket.setState("secretAuth", {
+        ...state,
+        proof,
+        signed: true,
+        pubKey: publicKey,
+        mode: "ephemeral",
+        wallet: null,
+        passkey: null,
+      });
+
+      decallLog("session", "Ephemeral sign-in for invite link", { joinId });
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "Ephemeral sign-in failed";
+      decallLog("session", "Ephemeral invite sign-in failed", err, "error");
+      this.challengeError$.update(text);
+      this.showJoinPrompt$.update(true);
+    }
   }
 
   private consumePendingJoinCallId() {
