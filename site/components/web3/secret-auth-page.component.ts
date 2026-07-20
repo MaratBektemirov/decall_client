@@ -9,7 +9,6 @@ import { UI_KIT } from "cruzo/ui-components/const";
 import { SpinnerComponent, SpinnerConfig, SpinnerValue } from "cruzo/ui-components/spinner";
 import { SecretAuthComponent } from "cruzo-web3/components/secret-auth";
 import type { SecretAuthState } from "cruzo-web3";
-import { secretAuthService } from "cruzo-web3";
 
 import { fetchAuthChallenge } from "site/services/auth-api";
 import { fetchTurnIceServers } from "site/services/ice-servers";
@@ -22,6 +21,13 @@ const EXIT_FADE_MS = 520;
 const LOGO_SRC = `${import.meta.env.BASE_URL}logo.svg`;
 
 const CHAT_CONNECTED_STATUSES = new Set(["chat ready", "open", "connected"]);
+
+const STATUS_SPINNER_STATUSES = new Set([
+  "connecting…",
+  "negotiating…",
+  "waiting for approval…",
+  "waiting for host…",
+]);
 
 export class SecretAuthPageComponent extends AbstractComponent {
   static selector = "secret-auth-page-component";
@@ -50,11 +56,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
   // states for the remote user
   isRemoteAudioEnabled$ = this.newRx(false);
   isRemoteVideoEnabled$ = this.newRx(false);
+  peerAudioMuted$ = this.newRx(false);
+  peerVideoHidden$ = this.newRx(false);
   challengeLoading$ = this.newRx(false);
   challengeError$ = this.newRx("");
-  ephemeralPreviewCallId$ = this.newRx("");
-  ephemeralPreviewLoading$ = this.newRx(false);
-  showEphemeralPreview$ = this.newRx(false);
 
   joinCallId$ = this.newRx("");
   callModalOpen$ = this.newRx(false);
@@ -64,6 +69,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
   chatStatus$ = this.newRx("idle");
   connectionMode$ = this.newRx("");
   chatConnected$ = this.newRx(false);
+  sessionRole$ = this.newRx<"host" | "guest">("host");
+  statusSpinner$ = this.newRx(false);
   inCall$ = this.newRx(false);
   connectionLogText$ = this.newRx("");
   chatMessages: Rx<ChatMessage>[] = [];
@@ -88,9 +95,10 @@ export class SecretAuthPageComponent extends AbstractComponent {
   secretAuthState$ = this.newRxStateFromBucket(this.innerBucket, "secretAuth");
 
   private identityGeneration = 0;
-  private ephemeralPreviewGeneration = 0;
   private challengeGeneration = 0;
   private chatSession: ChatSession | null = null;
+  private chatSessionGen = 0;
+  private homeRoomActive = false;
   private authTransitionStarted = false;
   private pendingIdentity = "";
   private stopIdentityScramble?: () => void;
@@ -124,18 +132,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
             </button>
           </div>
 
-          <div class="${styles.ephemeralPreview}" attached="{{ root.showEphemeralPreview$::rx }}">
-            <span class="${styles.ephemeralPreviewLabel}">Your Call ID</span>
-            <code class="${styles.ephemeralPreviewId}"
-              attached="{{ !root.ephemeralPreviewLoading$::rx }}">
-              {{ root.ephemeralPreviewCallId$::rx }}
-            </code>
-            <span class="${styles.ephemeralPreviewStatus}"
-              attached="{{ root.ephemeralPreviewLoading$::rx }}">
-              Generating…
-            </span>
-          </div>
-
           <secret-auth-component
             component-id="secretAuth"
             bucket-id="${this.innerBucket.id}">
@@ -152,7 +148,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
                     <div class="${styles.chatStatusGroup}">
                       <span class="${styles.chatStatus}">{{ root.chatStatus$::rx }}</span>
                       <div class="${styles.chatStatusSpinner}"
-                        attached="{{ root.inCall$::rx && !root.chatConnected$::rx }}"
+                        attached="{{ root.statusSpinner$::rx }}"
                         is="spinner"
                         component-id="chatSpinner"
                         bucket-id="${this.innerBucket.id}">
@@ -180,19 +176,57 @@ export class SecretAuthPageComponent extends AbstractComponent {
               <div class="${styles.chatActions}">
                 <button type="button"
                   class="${k}_button ${k}_button-s ${k}_button-primary"
-                  attached="{{ !root.inCall$::rx }}"
-                  onclick="{{ root.openChatRoom() }}">Wait</button>
-                <button type="button"
-                  class="${k}_button ${k}_button-s ${k}_button-primary"
-                  attached="{{ !root.inCall$::rx }}"
+                  attached="{{ root.sessionRole$::rx === 'host' && !root.chatConnected$::rx }}"
                   onclick="{{ root.openCallModal() }}">Call</button>
                 <button type="button"
                   class="${k}_button ${k}_button-s ${k}_button-secondary"
-                  attached="{{ root.inCall$::rx }}"
+                  attached="{{ root.sessionRole$::rx === 'guest' || root.chatConnected$::rx }}"
                   onclick="{{ root.disconnectChat() }}">Disconnect</button>
               </div>
 
-              <div class="${styles.mediaControls}">
+              <div class="${styles.mediaControlsBar}" attached="{{ root.chatConnected$::rx }}">
+                <div class="${styles.mediaGroup}">
+                  <span class="${styles.mediaGroupLabel}">Peer</span>
+                  <div class="${styles.mediaGroupButtons}">
+                    <button type="button"
+                      class="${styles.mediaButton} ${styles.mediaButtonPeer}"
+                      aria-label="{{ root.peerAudioMuted$::rx ? 'Unmute peer audio' : 'Mute peer audio' }}"
+                      onclick="{{ root.togglePeerAudio() }}">
+                      <microphone-icon class="${styles.mediaIcon}" attached="{{ !root.peerAudioMuted$::rx }}"></microphone-icon>
+                      <microphone-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ root.peerAudioMuted$::rx }}"></microphone-off-icon>
+                    </button>
+                    <button type="button"
+                      class="${styles.mediaButton} ${styles.mediaButtonPeer}"
+                      aria-label="{{ root.peerVideoHidden$::rx ? 'Show peer video' : 'Hide peer video' }}"
+                      onclick="{{ root.togglePeerVideo() }}">
+                      <video-icon class="${styles.mediaIcon}" attached="{{ !root.peerVideoHidden$::rx }}"></video-icon>
+                      <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ root.peerVideoHidden$::rx }}"></video-off-icon>
+                    </button>
+                  </div>
+                </div>
+                <div class="${styles.mediaGroupDivider}" aria-hidden="true"></div>
+                <div class="${styles.mediaGroup}">
+                  <span class="${styles.mediaGroupLabel}">You</span>
+                  <div class="${styles.mediaGroupButtons}">
+                    <button type="button"
+                      class="${styles.mediaButton} ${styles.mediaButtonSelf}"
+                      aria-label="{{ root.isAudioEnabled$::rx ? 'Turn microphone off' : 'Turn microphone on' }}"
+                      onclick="{{ root.toggleAudio() }}">
+                      <microphone-icon class="${styles.mediaIcon}" attached="{{ root.isAudioEnabled$::rx }}"></microphone-icon>
+                      <microphone-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isAudioEnabled$::rx }}"></microphone-off-icon>
+                    </button>
+                    <button type="button"
+                      class="${styles.mediaButton} ${styles.mediaButtonSelf}"
+                      aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
+                      onclick="{{ root.toggleVideo() }}">
+                      <video-icon class="${styles.mediaIcon}" attached="{{ root.isVideoEnabled$::rx }}"></video-icon>
+                      <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isVideoEnabled$::rx }}"></video-off-icon>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="${styles.mediaControls}" attached="{{ !root.chatConnected$::rx }}">
                 <button type="button"
                   class="${styles.mediaButton}"
                   aria-label="Open video"
@@ -254,8 +288,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
                     <span class="${styles.remoteVideoPlaceholderText}">Waiting for peer…</span>
                   </div>
                   <div class="${styles.remoteVideoPlaceholder}"
-                    attached="{{ root.chatConnected$::rx && !root.isRemoteVideoEnabled$::rx }}">
-                    <span class="${styles.remoteVideoPlaceholderText}">Camera off</span>
+                    attached="{{ root.chatConnected$::rx && (!root.isRemoteVideoEnabled$::rx || root.peerVideoHidden$::rx) }}">
+                    <span class="${styles.remoteVideoPlaceholderText}">{{ root.peerVideoHidden$::rx ? 'Video hidden' : 'Camera off' }}</span>
                   </div>
 
                   <div class="${styles.localPip}">
@@ -279,20 +313,48 @@ export class SecretAuthPageComponent extends AbstractComponent {
                   </div>
 
                   <div class="${styles.videoControlsBar}">
-                    <button type="button"
-                      class="${styles.mediaButton} ${styles.mediaButtonDark}"
-                      aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
-                      onclick="{{ root.toggleVideo() }}">
-                      <video-icon class="${styles.mediaIcon}" attached="{{ root.isVideoEnabled$::rx }}"></video-icon>
-                      <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isVideoEnabled$::rx }}"></video-off-icon>
-                    </button>
-                    <button type="button"
-                      class="${styles.mediaButton} ${styles.mediaButtonDark}"
-                      aria-label="{{ root.isAudioEnabled$::rx ? 'Turn microphone off' : 'Turn microphone on' }}"
-                      onclick="{{ root.toggleAudio() }}">
-                      <microphone-icon class="${styles.mediaIcon}" attached="{{ root.isAudioEnabled$::rx }}"></microphone-icon>
-                      <microphone-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isAudioEnabled$::rx }}"></microphone-off-icon>
-                    </button>
+                    <div class="${styles.mediaGroup}" attached="{{ root.chatConnected$::rx }}">
+                      <span class="${styles.mediaGroupLabel} ${styles.mediaGroupLabelDark}">Peer</span>
+                      <div class="${styles.mediaGroupButtons}">
+                        <button type="button"
+                          class="${styles.mediaButton} ${styles.mediaButtonDark} ${styles.mediaButtonPeerDark}"
+                          aria-label="{{ root.peerAudioMuted$::rx ? 'Unmute peer audio' : 'Mute peer audio' }}"
+                          onclick="{{ root.togglePeerAudio() }}">
+                          <microphone-icon class="${styles.mediaIcon}" attached="{{ !root.peerAudioMuted$::rx }}"></microphone-icon>
+                          <microphone-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ root.peerAudioMuted$::rx }}"></microphone-off-icon>
+                        </button>
+                        <button type="button"
+                          class="${styles.mediaButton} ${styles.mediaButtonDark} ${styles.mediaButtonPeerDark}"
+                          aria-label="{{ root.peerVideoHidden$::rx ? 'Show peer video' : 'Hide peer video' }}"
+                          onclick="{{ root.togglePeerVideo() }}">
+                          <video-icon class="${styles.mediaIcon}" attached="{{ !root.peerVideoHidden$::rx }}"></video-icon>
+                          <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ root.peerVideoHidden$::rx }}"></video-off-icon>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="${styles.mediaGroupDivider} ${styles.mediaGroupDividerDark}"
+                      attached="{{ root.chatConnected$::rx }}"
+                      aria-hidden="true"></div>
+                    <div class="${styles.mediaGroup}">
+                      <span class="${styles.mediaGroupLabel} ${styles.mediaGroupLabelDark}">You</span>
+                      <div class="${styles.mediaGroupButtons}">
+                        <button type="button"
+                          class="${styles.mediaButton} ${styles.mediaButtonDark} ${styles.mediaButtonSelfDark}"
+                          aria-label="{{ root.isAudioEnabled$::rx ? 'Turn microphone off' : 'Turn microphone on' }}"
+                          onclick="{{ root.toggleAudio() }}">
+                          <microphone-icon class="${styles.mediaIcon}" attached="{{ root.isAudioEnabled$::rx }}"></microphone-icon>
+                          <microphone-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isAudioEnabled$::rx }}"></microphone-off-icon>
+                        </button>
+                        <button type="button"
+                          class="${styles.mediaButton} ${styles.mediaButtonDark} ${styles.mediaButtonSelfDark}"
+                          aria-label="{{ root.isVideoEnabled$::rx ? 'Turn camera off' : 'Turn camera on' }}"
+                          onclick="{{ root.toggleVideo() }}">
+                          <video-icon class="${styles.mediaIcon}" attached="{{ root.isVideoEnabled$::rx }}"></video-icon>
+                          <video-off-icon class="${styles.mediaIcon} ${styles.mediaIconOff}" attached="{{ !root.isVideoEnabled$::rx }}"></video-off-icon>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="${styles.mediaGroupDivider} ${styles.mediaGroupDividerDark}" aria-hidden="true"></div>
                     <button type="button"
                       class="${styles.mediaButton} ${styles.mediaButtonDanger}"
                       aria-label="Disconnect"
@@ -360,21 +422,16 @@ export class SecretAuthPageComponent extends AbstractComponent {
     super.connectedCallback();
 
     this.newRxFunc(() => {
-      const loading = Boolean(this.inCall$.actual) && !this.chatConnected$.actual;
+      const loading = Boolean(this.statusSpinner$.actual);
       this.innerBucket.setValue(
         "chatSpinner",
         loading ? SpinnerValue.active : SpinnerValue.inactive,
       );
-    }, this.inCall$, this.chatConnected$);
+    }, this.statusSpinner$);
 
     this.newRxFunc((state) => {
       this.updateCallIdentity(state);
-      this.syncEphemeralPreview();
     }, this.secretAuthState$);
-
-    this.newRxFunc(() => {
-      this.syncEphemeralPreview();
-    }, secretAuthService.mode$, secretAuthService.ephemeralPubKey$);
 
     this.newRxFunc((hasIdentity) => {
       if (hasIdentity) {
@@ -393,28 +450,39 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.stopIdentityScramble?.();
     this.stopIdentityScramble = undefined;
     this.clearTypingTimers();
-    this.disconnectChat();
+    this.endCall({ returnHome: false });
     super.disconnectedCallback();
   }
 
   refreshChallenge() {
-    this.disconnectChat();
+    this.endCall({ returnHome: false });
     this.hasCallIdentity$.update(false);
     this.callIdentity$.update("");
-    this.clearEphemeralPreview();
     this.loadChallenge();
   }
 
-  openChatRoom() {
+  private openHomeRoom() {
     const roomId = this.callIdentity$.actual;
-    if (!roomId) return;
-    this.startChat(roomId, "host");
+    if (!roomId || !this.secretAuthState$.actual?.signed) return;
+    if (this.homeRoomActive && this.sessionRole$.actual === "host") return;
+
+    void this.startChat(roomId, "host");
   }
 
   joinChatRoom() {
     const roomId = (this.joinCallId$.actual ?? "").trim();
     if (!roomId) return;
-    this.startChat(roomId, "guest");
+
+    const ownId = this.callIdentity$.actual;
+    if (ownId && this.normalizeRoomId(roomId) === this.normalizeRoomId(ownId)) {
+      this.appendChatMessage({
+        from: "system",
+        text: "That's your Call ID — share it so others can call you.",
+      });
+      return;
+    }
+
+    void this.startChat(roomId, "guest");
   }
 
   openCallModal() {
@@ -539,6 +607,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.connectionMode$.update("");
     this.isRemoteAudioEnabled$.update(false);
     this.isRemoteVideoEnabled$.update(false);
+    this.peerAudioMuted$.update(false);
+    this.peerVideoHidden$.update(false);
     this.chatDraft$.update("");
 
     // Forcibly clear the DOM on exit
@@ -554,20 +624,32 @@ export class SecretAuthPageComponent extends AbstractComponent {
     if (localVideo) localVideo.srcObject = null;
   }
 
-  private endCall() {
-    if (!this.inCall$.actual && !this.chatSession) return;
+  private endCall(options: { returnHome?: boolean } = {}) {
+    const returnHome = options.returnHome ?? true;
+    const signedIn = Boolean(this.secretAuthState$.actual?.signed);
+    const ownRoomId = this.callIdentity$.actual;
 
-    this.clearCallUi();
-    this.stopLocalMedia();
-    this.chatSession?.close();
-    this.chatSession = null;
+    if (!this.inCall$.actual && !this.chatSession) {
+      if (returnHome && signedIn && ownRoomId) {
+        this.openHomeRoom();
+      }
+      return;
+    }
+
+    this.teardownSession();
     this.chatStatus$.update("idle");
     this.inCall$.update(false);
+    this.statusSpinner$.update(false);
+    this.sessionRole$.update("host");
+
+    if (returnHome && signedIn && ownRoomId) {
+      this.openHomeRoom();
+    }
   }
 
   disconnectChat() {
     decallLog("session", "User disconnected call");
-    this.endCall();
+    this.endCall({ returnHome: true });
   }
 
   openVideoModal() {
@@ -707,6 +789,22 @@ export class SecretAuthPageComponent extends AbstractComponent {
     void this.toggleAudioAsync();
   }
 
+  togglePeerAudio() {
+    this.peerAudioMuted$.update(!this.peerAudioMuted$.actual);
+    this.applyRemoteMediaPlayback();
+  }
+
+  togglePeerVideo() {
+    this.peerVideoHidden$.update(!this.peerVideoHidden$.actual);
+    this.template.detectChanges();
+  }
+
+  private applyRemoteMediaPlayback() {
+    const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
+    if (!remoteVideo) return;
+    remoteVideo.muted = this.peerAudioMuted$.actual;
+  }
+
   private async toggleAudioAsync() {
     const audioTrack = this.localStream?.getAudioTracks()[0];
     if (!audioTrack) {
@@ -749,12 +847,27 @@ export class SecretAuthPageComponent extends AbstractComponent {
     this.syncMediaCommand("VIDEO", next);
   }
 
+  private teardownSession() {
+    this.chatSessionGen += 1;
+    this.clearCallUi();
+    this.stopLocalMedia();
+    this.chatSession?.close();
+    this.chatSession = null;
+    this.homeRoomActive = false;
+  }
+
+  private normalizeRoomId(id: string) {
+    return id.replace(/[^0-9a-zA-Z]/g, "").toUpperCase();
+  }
+
   private async startChat(roomId: string, role: "host" | "guest") {
-    this.disconnectChat();
+    this.teardownSession();
     this.chatMessages = [];
     this.clearConnectionLog();
     this.template.detectChanges();
+    this.sessionRole$.update(role);
     this.inCall$.update(true);
+    this.statusSpinner$.update(true);
 
     decallLog("session", `Starting call (${role})`, {
       roomId,
@@ -772,9 +885,11 @@ export class SecretAuthPageComponent extends AbstractComponent {
     }
 
     const selfCallId = this.callIdentity$.actual ?? "";
+    const sessionGen = ++this.chatSessionGen;
 
     this.chatSession = new ChatSession(
       (message) => {
+        if (sessionGen !== this.chatSessionGen) return;
 
         if (message.text.startsWith("CMD:")) {
 
@@ -791,15 +906,21 @@ export class SecretAuthPageComponent extends AbstractComponent {
       },
 
         (status) => {
+        if (sessionGen !== this.chatSessionGen) return;
+
         this.chatStatus$.update(status);
         this.chatConnected$.update(CHAT_CONNECTED_STATUSES.has(status));
+        this.statusSpinner$.update(STATUS_SPINNER_STATUSES.has(status));
 
         if (status === "waiting for peer…") {
           this.joinRequestOpen$.update(false);
+          if (this.sessionRole$.actual === "host") {
+            this.homeRoomActive = true;
+          }
         }
 
         if (status === "idle") {
-          this.endCall();
+          this.endCall({ returnHome: true });
         }
 
         if (status === "chat ready" || status === "open" || status === "connected") {
@@ -811,10 +932,12 @@ export class SecretAuthPageComponent extends AbstractComponent {
       },
 
       (mode) => {
+        if (sessionGen !== this.chatSessionGen) return;
         this.connectionMode$.update(mode === "p2p" ? "P2P" : mode === "turn" ? "TURN" : "");
       },
 
       (callId) => {
+        if (sessionGen !== this.chatSessionGen) return;
         this.joinRequestCallId$.update(callId || "unknown");
         this.joinRequestOpen$.update(true);
       },
@@ -822,15 +945,18 @@ export class SecretAuthPageComponent extends AbstractComponent {
       this.localStream,
 
       (remoteStream) => {
+        if (sessionGen !== this.chatSessionGen) return;
         const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement;
         if (remoteVideo) {
           remoteVideo.srcObject = remoteStream;
         }
+        this.applyRemoteMediaPlayback();
         this.isRemoteVideoEnabled$.update(remoteStream.getVideoTracks().some((t) => t.enabled));
         this.isRemoteAudioEnabled$.update(remoteStream.getAudioTracks().some((t) => t.enabled));
       },
 
       () => {
+        if (sessionGen !== this.chatSessionGen) return;
         const remoteVideo = document.getElementById("remoteVideo") as HTMLVideoElement | null;
         if (remoteVideo?.srcObject instanceof MediaStream) {
           remoteVideo.srcObject.getTracks().forEach((track) => track.stop());
@@ -841,7 +967,8 @@ export class SecretAuthPageComponent extends AbstractComponent {
       },
 
       () => {
-        this.endCall();
+        if (sessionGen !== this.chatSessionGen) return;
+        this.endCall({ returnHome: true });
       },
 
       () => {
@@ -865,11 +992,23 @@ export class SecretAuthPageComponent extends AbstractComponent {
       ? this.chatSession.openRoom(roomId)
       : this.chatSession.joinRoom(roomId);
 
-    action.catch((err: unknown) => {
+    action
+      .then(() => {
+        if (role === "host") {
+          this.homeRoomActive = true;
+        }
+      })
+      .catch((err: unknown) => {
       const text = err instanceof Error ? err.message : "chat connection failed";
       decallLog("session", "Call start failed", err, "error");
       this.appendChatMessage({ from: "system", text });
       this.chatStatus$.update("error");
+      this.statusSpinner$.update(false);
+      this.inCall$.update(false);
+
+      if (role === "guest") {
+        this.openHomeRoom();
+      }
     });
   }
 
@@ -919,53 +1058,6 @@ export class SecretAuthPageComponent extends AbstractComponent {
       });
   }
 
-  private syncEphemeralPreview() {
-    const signed = this.secretAuthState$.actual?.signed;
-
-    if (signed || secretAuthService.getMode() !== "ephemeral") {
-      this.clearEphemeralPreview();
-      return;
-    }
-
-    this.updateEphemeralPreview(secretAuthService.getEphemeralPubKey());
-  }
-
-  private updateEphemeralPreview(pubKey: SecretAuthState["pubKey"]) {
-    if (!pubKey) {
-      this.showEphemeralPreview$.update(false);
-      this.ephemeralPreviewCallId$.update("");
-      this.ephemeralPreviewLoading$.update(false);
-      return;
-    }
-
-    const generation = ++this.ephemeralPreviewGeneration;
-
-    this.showEphemeralPreview$.update(true);
-    this.ephemeralPreviewLoading$.update(true);
-    this.ephemeralPreviewCallId$.update("");
-
-    pubKeyToCallIdentity(pubKey)
-      .then((identity) => {
-        if (generation !== this.ephemeralPreviewGeneration) return;
-        this.ephemeralPreviewCallId$.update(identity);
-        this.ephemeralPreviewLoading$.update(false);
-      })
-      .catch((err: unknown) => {
-        if (generation !== this.ephemeralPreviewGeneration) return;
-        decallLog("api", "Ephemeral Call ID preview failed", err, "error");
-        this.showEphemeralPreview$.update(false);
-        this.ephemeralPreviewCallId$.update("");
-        this.ephemeralPreviewLoading$.update(false);
-      });
-  }
-
-  private clearEphemeralPreview() {
-    this.ephemeralPreviewGeneration += 1;
-    this.showEphemeralPreview$.update(false);
-    this.ephemeralPreviewCallId$.update("");
-    this.ephemeralPreviewLoading$.update(false);
-  }
-
   private updateCallIdentity(state: SecretAuthState | null | undefined) {
     const pubKey = state?.pubKey;
 
@@ -1005,6 +1097,7 @@ export class SecretAuthPageComponent extends AbstractComponent {
       requestAnimationFrame(() => {
         this.postAuthEntering$.update(true);
         this.startIdentityScramble(this.pendingIdentity);
+        this.openHomeRoom();
       });
     }, EXIT_FADE_MS);
   }
